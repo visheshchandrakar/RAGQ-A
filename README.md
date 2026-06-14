@@ -1,5 +1,6 @@
-<img width="1920" height="1080" alt="Screenshot 2026-06-14 at 19 47 41 (2)" src="https://github.com/user-attachments/assets/2e0920dc-d18b-430a-b90e-22c59b7aaa1e" />
-<img width="1920" height="1080" alt="Screenshot 2026-06-14 at 19 47 32 (2)" src="https://github.com/user-attachments/assets/4ad1f973-830a-4e41-b84f-ddd9f52078f8" />
+<img width="1470" height="956" alt="Screenshot 2026-06-14 at 19 47 13" src="https://github.com/user-attachments/assets/febd5006-3c97-493f-8cdf-347ae487b7af" />
+<img width="1470" height="956" alt="Screenshot 2026-06-14 at 19 47 41" src="https://github.com/user-attachments/assets/a0c85c71-3d00-4267-a533-6668626ee965" />
+
 <img width="1470" height="956" alt="Screenshot 2026-06-14 at 19 47 32" src="https://github.com/user-attachments/assets/c647ef5a-a0f2-4178-97a6-166c04bd618f" />
 # Self-RAG PDF Chatbot
 
