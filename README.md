@@ -1,3 +1,6 @@
+<img width="1920" height="1080" alt="Screenshot 2026-06-14 at 19 47 41 (2)" src="https://github.com/user-attachments/assets/2e0920dc-d18b-430a-b90e-22c59b7aaa1e" />
+<img width="1920" height="1080" alt="Screenshot 2026-06-14 at 19 47 32 (2)" src="https://github.com/user-attachments/assets/4ad1f973-830a-4e41-b84f-ddd9f52078f8" />
+<img width="1470" height="956" alt="Screenshot 2026-06-14 at 19 47 32" src="https://github.com/user-attachments/assets/c647ef5a-a0f2-4178-97a6-166c04bd618f" />
 # Self-RAG PDF Chatbot
 
 **Full pipeline: PDF → FAISS → Self-RAG → GPT-4o-mini → ARES evaluation**
