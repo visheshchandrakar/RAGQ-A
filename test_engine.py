@@ -6,12 +6,10 @@ Creates a tiny synthetic PDF-like text corpus in memory and runs one query
 through the full pipeline.
 
 Usage:
-    OPENAI_API_KEY=sk-... python test_engine.py
+    python test_engine.py
 """
 
 import io
-import os
-import sys
 
 # We'll inject a fake PDF using pypdf-compatible bytes via reportlab if available,
 # or test with direct chunk injection.
@@ -77,16 +75,11 @@ def inject_test_chunks(engine: SelfRAGEngine):
 
 
 def main():
-    api_key = os.environ.get("OPENAI_API_KEY", "")
-    if not api_key:
-        print("ERROR: set OPENAI_API_KEY environment variable.")
-        sys.exit(1)
-
     print("=" * 60)
     print("Self-RAG Engine — CLI Smoke Test")
     print("=" * 60)
 
-    engine = SelfRAGEngine(api_key=api_key)
+    engine = SelfRAGEngine()
 
     print("\n[1] Injecting test chunks…")
     inject_test_chunks(engine)

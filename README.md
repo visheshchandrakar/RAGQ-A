@@ -4,7 +4,7 @@
 <img width="1470" height="956" alt="Screenshot 2026-06-14 at 19 47 32" src="https://github.com/user-attachments/assets/c647ef5a-a0f2-4178-97a6-166c04bd618f" />
 # Self-RAG PDF Chatbot
 
-**Full pipeline: PDF → FAISS → Self-RAG → GPT-4o-mini → ARES evaluation**
+**Fully local pipeline: PDF → FAISS → Self-RAG → Qwen3-8B 4-bit → ARES evaluation**
 
 Implements the core ideas from:
 - **Lewis et al. (2020)** — Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks
@@ -19,7 +19,7 @@ Implements the core ideas from:
 PDF(s)
   │
   ├─ [Chunking]   Sliding window, 400 tok / 60 tok overlap        ← Gao §3.2
-  ├─ [Embedding]  text-embedding-3-small (1536-dim)
+  ├─ [Embedding]  all-MiniLM-L6-v2 (384-dim, local)
   └─ [FAISS]      IndexFlatL2 — exact nearest-neighbor index       ← Lewis §2
 
 Query
@@ -28,7 +28,7 @@ Query
   ├─ [FAISS]      top-6 candidates by L2 distance
   ├─ [Rerank]     cosine similarity → keep top-3                   ← Gao §3.3
   ├─ [IsRel]      Self-RAG relevance filter (per chunk)            ← Asai §3
-  ├─ [Generate]   GPT-4o-mini + [SOURCE_N] citation markers        ← Lewis §4
+  ├─ [Generate]   Qwen3-8B 4-bit + [SOURCE_N] citation markers     ← Lewis §4
   ├─ [IsSup]      Self-RAG groundedness check                      ← Asai §3
   ├─ [IsUse]      Self-RAG utility check                           ← Asai §3
   └─ [ARES]       Faithfulness / Answer Relevance / Context Rel.   ← Gao §5
@@ -49,8 +49,7 @@ source .venv/bin/activate       # Windows: .venv\Scripts\activate
 # 3. Install dependencies
 pip install -r requirements.txt
 
-# 4. Set your OpenAI API key
-export OPENAI_API_KEY=sk-...    # Windows: set OPENAI_API_KEY=sk-...
+# No API key is needed. Models are downloaded from Hugging Face on first use.
 ```
 
 ---
@@ -61,7 +60,12 @@ export OPENAI_API_KEY=sk-...    # Windows: set OPENAI_API_KEY=sk-...
 ```bash
 streamlit run app.py
 ```
-Open `http://localhost:8501`. Use the sidebar to enter your API key and upload PDFs.
+Open `http://localhost:8501`, click **Load local models**, then upload PDFs. On
+Apple Silicon the app uses `Qwen/Qwen3-8B-MLX-4bit`; on CUDA/Linux it loads
+`Qwen/Qwen3-8B` with NF4 4-bit quantization through bitsandbytes. Allow roughly
+6 GB of free memory plus disk space for the first model download. The sidebar
+shows byte-level download progress. Completed files remain in the Hugging Face
+cache and are reused automatically on every later launch.
 
 ### CLI smoke test (no PDF needed)
 ```bash
@@ -77,7 +81,7 @@ Injects 5 RAG-topic paragraphs directly and runs a full pipeline query.
 |---|---|
 | PDF ingestion | `pypdf` — multi-page, multi-file |
 | Chunking | Sliding window (400 tok, 60 tok overlap) via `tiktoken` |
-| Embeddings | OpenAI `text-embedding-3-small` (1536-dim) |
+| Embeddings | Local `all-MiniLM-L6-v2` (384-dim) |
 | Vector store | `faiss-cpu` `IndexFlatL2` — exact L2 search |
 | Reranking | Cosine similarity re-sort of top-6 FAISS hits → top-3 |
 | **Self-RAG [Retrieve]** | LLM decides if retrieval is needed at all |
@@ -88,21 +92,16 @@ Injects 5 RAG-topic paragraphs directly and runs a full pipeline query.
 | **ARES Faithfulness** | LLM judge: answer supported by context? |
 | **ARES Answer Relevance** | LLM judge: answer addresses the question? |
 | **ARES Context Relevance** | LLM judge: retrieved context relevant? |
-| Generation | `gpt-4o-mini` — cost-efficient |
+| Generation | Local Qwen3-8B — 4-bit quantized |
 
 ---
 
-## Cost estimate
+## Local model configuration
 
-| Call type | Per query |
-|---|---|
-| Query embedding | ~$0.00002 |
-| Self-RAG [Retrieve] | ~$0.00005 |
-| Self-RAG [IsRel] × 3 | ~$0.00015 |
-| Generation | ~$0.0003 |
-| Self-RAG critique | ~$0.0001 |
-| ARES evaluation | ~$0.0002 |
-| **Total per query** | **~$0.0008** |
+No per-query API cost or API key is required. To use a compatible alternative
+checkpoint, set `QWEN_MODEL_ID` before starting the app. The default is already
+4-bit on Apple Silicon; other platforms quantize the base Qwen3-8B weights to
+4-bit while loading.
 
 ---
 
@@ -131,7 +130,7 @@ index.train(training_vectors)
 **Add HyDE** (Hypothetical Document Embeddings, Gao §3.1) — generate a hypothetical answer and embed that instead of the raw query:
 ```python
 def hyde_embed(self, question: str) -> np.ndarray:
-    hyp = self.client.chat.completions.create(...)  # generate hypothetical doc
+    hyp = self.client.generate([...])  # generate hypothetical doc locally
     return self._embed_one(hyp)
 ```
 

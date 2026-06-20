@@ -15,17 +15,169 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import platform
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import faiss
 import numpy as np
 import tiktoken
-from openai import OpenAI
 from pypdf import PdfReader
+from sentence_transformers import SentenceTransformer
+
+
+class LocalQwen3:
+    """Small adapter around a locally loaded, 4-bit Qwen3-8B model."""
+
+    TRANSFORMERS_MODEL = "Qwen/Qwen3-8B"
+    MLX_MODEL = "Qwen/Qwen3-8B-MLX-4bit"
+
+    def __init__(
+        self,
+        model_id: str | None = None,
+        progress_callback: Callable[[float, str], None] | None = None,
+    ):
+        self.backend = "mlx" if platform.system() == "Darwin" and platform.machine() == "arm64" else "transformers"
+        selected_model = model_id or os.getenv(
+            "QWEN_MODEL_ID",
+            self.MLX_MODEL if self.backend == "mlx" else self.TRANSFORMERS_MODEL,
+        )
+        self.model_id = selected_model
+        model_path = self._ensure_downloaded(selected_model, progress_callback)
+
+        if self.backend == "mlx":
+            from mlx_lm import load
+
+            self.model, self.tokenizer = load(model_path)
+        else:
+            import torch
+            from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+
+            quantization = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=torch.bfloat16,
+                bnb_4bit_use_double_quant=True,
+            )
+            self.tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True)
+            self.model = AutoModelForCausalLM.from_pretrained(
+                model_path,
+                device_map="auto",
+                quantization_config=quantization,
+                local_files_only=True,
+            )
+
+    @staticmethod
+    def _ensure_downloaded(
+        model_id: str,
+        progress_callback: Callable[[float, str], None] | None,
+    ) -> str:
+        """Download once with visible progress, then return the cached snapshot."""
+        if Path(model_id).expanduser().exists():
+            return str(Path(model_id).expanduser().resolve())
+
+        from huggingface_hub import HfApi, snapshot_download
+        from huggingface_hub.constants import HF_HUB_CACHE
+        from huggingface_hub.file_download import repo_folder_name
+
+        storage = Path(HF_HUB_CACHE) / repo_folder_name(repo_id=model_id, repo_type="model")
+        marker = storage / ".ragqa_download_complete"
+        if marker.exists():
+            cached_path = Path(marker.read_text().strip())
+            if cached_path.is_dir():
+                if progress_callback:
+                    progress_callback(1.0, "Qwen3 found in cache — no download needed.")
+                return str(cached_path)
+
+        if progress_callback:
+            progress_callback(0.0, "Checking Qwen3 download size…")
+        info = HfApi().model_info(model_id, files_metadata=True)
+        total_bytes = sum(file.size or 0 for file in (info.siblings or []))
+
+        def download() -> str:
+            return snapshot_download(model_id, revision=info.sha, max_workers=4)
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(download)
+            while not future.done():
+                downloaded = sum(
+                    file.stat().st_size
+                    for file in (storage / "blobs").glob("*")
+                    if file.is_file()
+                ) if (storage / "blobs").exists() else 0
+                fraction = min(downloaded / total_bytes, 0.99) if total_bytes else 0.0
+                if progress_callback:
+                    progress_callback(
+                        fraction,
+                        f"Downloading Qwen3: {downloaded / 1e9:.2f} / {total_bytes / 1e9:.2f} GB",
+                    )
+                time.sleep(0.25)
+            cached_path = future.result()
+
+        storage.mkdir(parents=True, exist_ok=True)
+        marker.write_text(cached_path)
+        if progress_callback:
+            progress_callback(1.0, "Qwen3 download complete. Loading model…")
+        return cached_path
+
+    def generate(
+        self,
+        messages: list[dict[str, str]],
+        temperature: float = 0.0,
+        max_new_tokens: int = 512,
+    ) -> str:
+        template_args = dict(tokenize=False, add_generation_prompt=True)
+        try:
+            prompt = self.tokenizer.apply_chat_template(
+                messages, enable_thinking=False, **template_args
+            )
+        except TypeError:  # Older tokenizer versions do not expose this flag.
+            prompt = self.tokenizer.apply_chat_template(messages, **template_args)
+
+        if self.backend == "mlx":
+            from mlx_lm import generate
+
+            return generate(
+                self.model,
+                self.tokenizer,
+                prompt=prompt,
+                max_tokens=max_new_tokens,
+                verbose=False,
+            ).strip()
+
+        import torch
+
+        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
+        do_sample = temperature > 0
+        kwargs = {
+            "max_new_tokens": max_new_tokens,
+            "do_sample": do_sample,
+            "pad_token_id": self.tokenizer.eos_token_id,
+        }
+        if do_sample:
+            kwargs["temperature"] = temperature
+            kwargs["top_p"] = 0.9
+        with torch.inference_mode():
+            output = self.model.generate(**inputs, **kwargs)
+        generated = output[0, inputs["input_ids"].shape[1]:]
+        return self.tokenizer.decode(generated, skip_special_tokens=True).strip()
+
+
+def _parse_json(text: str) -> dict:
+    """Parse JSON even if the local model surrounds it with prose or think tags."""
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+        if not match:
+            raise
+        return json.loads(match.group(0))
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -93,20 +245,30 @@ class SelfRAGEngine:
         Generate + citations → [IsSup] → [IsUse] → ARES eval
     """
 
-    EMBED_MODEL = "text-embedding-3-small"   # 1536-dim, cost-efficient
-    GEN_MODEL   = "gpt-4o-mini"
+    EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+    GEN_MODEL   = "Qwen3-8B (4-bit)"
     CHUNK_SIZE  = 400    # tokens  (Gao §3 recommends 256-512 for dense QA)
     CHUNK_OVERLAP = 60   # tokens  (~15% overlap to avoid boundary loss)
     TOP_K       = 6      # FAISS candidates before reranking
     RERANK_K    = 3      # after reranking, keep top-3
 
-    def __init__(self, api_key: str):
-        self.client = OpenAI(api_key=api_key)
+    def __init__(
+        self,
+        model_id: str | None = None,
+        progress_callback: Callable[[float, str], None] | None = None,
+    ):
+        self.client = LocalQwen3(
+            model_id=model_id,
+            progress_callback=progress_callback,
+        )
+        if progress_callback:
+            progress_callback(1.0, "Loading local embedding model…")
+        self.embedder = SentenceTransformer(self.EMBED_MODEL)
         self.enc = tiktoken.get_encoding("cl100k_base")
         self.chunks: list[Chunk] = []
         self.index: Optional[faiss.IndexFlatL2] = None
-        self.embeddings_matrix: Optional[np.ndarray] = None  # (N, 1536)
-        self._dim = 1536
+        self.embeddings_matrix: Optional[np.ndarray] = None
+        self._dim = self.embedder.get_sentence_embedding_dimension()
 
     # ------------------------------------------------------------------
     # 1. PDF ingestion & chunking  (Lewis §3; Gao §3.2)
@@ -177,19 +339,16 @@ class SelfRAGEngine:
     # ------------------------------------------------------------------
 
     def _embed_batch(self, texts: list[str]) -> list[list[float]]:
-        """Embed texts in chunks of 100 (API limit safety)."""
+        """Embed texts locally in batches."""
         all_vecs = []
         for i in range(0, len(texts), 100):
             batch = texts[i:i+100]
-            # Truncate to 8191 tokens max
-            safe = [t[:8000] for t in batch]
-            resp = self.client.embeddings.create(model=self.EMBED_MODEL, input=safe)
-            all_vecs.extend([r.embedding for r in resp.data])
+            vecs = self.embedder.encode(batch, convert_to_numpy=True, show_progress_bar=False)
+            all_vecs.extend(vecs.tolist())
         return all_vecs
 
     def _embed_one(self, text: str) -> np.ndarray:
-        resp = self.client.embeddings.create(model=self.EMBED_MODEL, input=[text[:8000]])
-        return np.array(resp.data[0].embedding, dtype=np.float32)
+        return self.embedder.encode(text, convert_to_numpy=True).astype(np.float32)
 
     # ------------------------------------------------------------------
     # 3. FAISS retrieval + cosine reranking  (Lewis §2; Gao §3.3)
@@ -240,14 +399,9 @@ class SelfRAGEngine:
             "Respond with JSON only: {\"retrieve\": true} or {\"retrieve\": false} "
             "with a one-sentence \"reason\"."
         )
-        resp = self.client.chat.completions.create(
-            model=self.GEN_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0,
-            response_format={"type": "json_object"},
-        )
+        response = self.client.generate([{"role": "user", "content": prompt}])
         try:
-            data = json.loads(resp.choices[0].message.content)
+            data = _parse_json(response)
             return bool(data.get("retrieve", True))
         except Exception:
             return True
@@ -263,14 +417,9 @@ class SelfRAGEngine:
                 "Is this passage relevant to answering the question? "
                 "Respond JSON only: {\"relevant\": true/false, \"reason\": \"...\"}"
             )
-            resp = self.client.chat.completions.create(
-                model=self.GEN_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0,
-                response_format={"type": "json_object"},
-            )
+            response = self.client.generate([{"role": "user", "content": prompt}])
             try:
-                data = json.loads(resp.choices[0].message.content)
+                data = _parse_json(response)
                 results.append(bool(data.get("relevant", True)))
             except Exception:
                 results.append(True)
@@ -294,14 +443,9 @@ class SelfRAGEngine:
             "3. critique: A 1-2 sentence critique noting any unsupported claims or gaps.\n\n"
             "Respond JSON only: {\"is_supported\": bool, \"is_useful\": bool, \"critique\": \"...\"}"
         )
-        resp = self.client.chat.completions.create(
-            model=self.GEN_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0,
-            response_format={"type": "json_object"},
-        )
+        response = self.client.generate([{"role": "user", "content": prompt}])
         try:
-            data = json.loads(resp.choices[0].message.content)
+            data = _parse_json(response)
             return (
                 bool(data.get("is_supported", True)),
                 bool(data.get("is_useful", True)),
@@ -342,15 +486,14 @@ class SelfRAGEngine:
             "Provide a well-structured answer with inline citations [SOURCE_N]."
         )
 
-        resp = self.client.chat.completions.create(
-            model=self.GEN_MODEL,
-            messages=[
+        answer = self.client.generate(
+            [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
             temperature=0.1,
-        )
-        answer = resp.choices[0].message.content.strip()
+            max_new_tokens=768,
+        ).strip()
 
         # Build citation list
         citations = []
@@ -406,14 +549,9 @@ class SelfRAGEngine:
             "  \"reasoning\": {\"context\": \"...\", \"faith\": \"...\", \"relevance\": \"...\"}\n"
             "}"
         )
-        resp = self.client.chat.completions.create(
-            model=self.GEN_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0,
-            response_format={"type": "json_object"},
-        )
+        response = self.client.generate([{"role": "user", "content": prompt}])
         try:
-            data = json.loads(resp.choices[0].message.content)
+            data = _parse_json(response)
             cr  = float(data.get("context_relevance", 0.5))
             fth = float(data.get("faithfulness", 0.5))
             ar  = float(data.get("answer_relevance", 0.5))
@@ -432,21 +570,38 @@ class SelfRAGEngine:
     # 7. Main entry point
     # ------------------------------------------------------------------
 
-    def answer(self, question: str) -> RAGAnswer:
+    def answer(
+        self,
+        question: str,
+        progress_callback: Callable[[float, str], None] | None = None,
+    ) -> RAGAnswer:
         """Full Self-RAG pipeline for one question."""
         t0 = time.time()
 
+        def report(value: float, message: str) -> None:
+            if progress_callback:
+                progress_callback(value, message)
+
         # [Retrieve] – do we even need documents?
+        report(0.05, "Deciding whether document retrieval is needed…")
         should_retrieve = self._self_rag_should_retrieve(question)
+        report(
+            0.15,
+            "Retrieval selected — searching indexed documents…"
+            if should_retrieve
+            else "Retrieval skipped — using general knowledge…",
+        )
 
         retrieved: list[RetrievedChunk] = []
         relevant_chunks: list[RetrievedChunk] = []
         self_rag_decision = SelfRAGDecision(retrieve=should_retrieve)
 
         if should_retrieve and self.index is not None:
+            report(0.25, "Searching FAISS and reranking matching chunks…")
             retrieved = self.retrieve(question)
 
             # [IsRel] – filter irrelevant chunks
+            report(0.40, "Checking retrieved chunks for relevance…")
             relevance_flags = self._self_rag_is_relevant(question, retrieved)
             self_rag_decision.is_relevant = relevance_flags
             relevant_chunks = [
@@ -457,22 +612,23 @@ class SelfRAGEngine:
                 relevant_chunks = retrieved[:1]
 
         # Generate answer (with or without context)
+        report(0.58, "Generating the answer with citations…")
         if relevant_chunks:
             answer_text, citations = self._generate_with_citations(question, relevant_chunks)
         else:
             # No retrieval / no relevant context — pure parametric answer
-            resp = self.client.chat.completions.create(
-                model=self.GEN_MODEL,
-                messages=[
+            answer_text = self.client.generate(
+                [
                     {"role": "system", "content": "Answer concisely from general knowledge. No documents were retrieved."},
                     {"role": "user", "content": question},
                 ],
                 temperature=0.1,
-            )
-            answer_text = resp.choices[0].message.content.strip()
+                max_new_tokens=768,
+            ).strip()
             citations = []
 
         # [IsSup] + [IsUse] critique
+        report(0.73, "Checking whether the answer is supported and useful…")
         context_for_critique = "\n\n".join(rc.chunk.text for rc in relevant_chunks)
         is_sup, is_use, critique = self._self_rag_critique(question, answer_text, context_for_critique)
         self_rag_decision.is_supported = is_sup
@@ -480,9 +636,11 @@ class SelfRAGEngine:
         self_rag_decision.critique = critique
 
         # ARES evaluation
+        report(0.88, "Calculating ARES evaluation scores…")
         ares = self._ares_evaluate(question, answer_text, relevant_chunks or retrieved)
 
         latency_ms = round((time.time() - t0) * 1000, 1)
+        report(1.0, "Self-RAG pipeline complete ✓")
 
         return RAGAnswer(
             question=question,

@@ -4,8 +4,9 @@ app.py  –  Self-RAG PDF Chatbot (Streamlit UI)
 Run:  streamlit run app.py
 """
 
+from __future__ import annotations
+
 import io
-import os
 
 import streamlit as st
 
@@ -65,8 +66,10 @@ st.markdown("""
 def get_engine() -> SelfRAGEngine | None:
     return st.session_state.get("engine")
 
-def init_engine(api_key: str):
-    st.session_state["engine"] = SelfRAGEngine(api_key=api_key)
+def init_engine(progress_callback=None):
+    st.session_state["engine"] = SelfRAGEngine(
+        progress_callback=progress_callback,
+    )
 
 if "history" not in st.session_state:
     st.session_state["history"] = []   # list[RAGAnswer]
@@ -191,20 +194,19 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # API key
-    api_key = st.text_input(
-        "OpenAI API Key",
-        type="password",
-        placeholder="sk-...",
-        help="Required for embeddings (text-embedding-3-small) and generation (GPT-4o-mini).",
-    )
-    if api_key and get_engine() is None:
-        init_engine(api_key)
-        st.success("Engine initialised ✓")
-    elif api_key and get_engine() is not None:
-        # Re-init if key changed
-        if getattr(get_engine().client, "api_key", None) != api_key:
-            init_engine(api_key)
+    if get_engine() is None:
+        st.caption("Runs locally with Qwen3-8B 4-bit. No API key is required.")
+        if st.button("Load local models", type="primary"):
+            progress = st.progress(0.0, text="Preparing local models…")
+
+            def show_progress(value: float, message: str):
+                progress.progress(max(0.0, min(value, 1.0)), text=message)
+
+            init_engine(progress_callback=show_progress)
+            progress.progress(1.0, text="Local models are ready ✓")
+            st.rerun()
+    else:
+        st.success("Local models loaded ✓")
 
     st.markdown("---")
 
@@ -248,10 +250,10 @@ with st.sidebar:
 | FAISS top-k | {e.TOP_K} |
 | Rerank top-k | {e.RERANK_K} |
 | FAISS index | `IndexFlatL2` |
-| Reranker | Cosine (OpenAI embeds) |
+| Reranker | Cosine (local embeddings) |
 """)
         else:
-            st.info("Set API key to see settings.")
+            st.info("Load the local models to see settings.")
 
     if st.button("🗑 Clear history"):
         st.session_state["history"] = []
@@ -276,7 +278,7 @@ PDF(s)
   │
   ├─ [Chunking]  sliding window, 400 tok / 60 tok overlap  (Gao §3.2)
   │
-  ├─ [Embedding] text-embedding-3-small → 1536-dim vectors
+  ├─ [Embedding] all-MiniLM-L6-v2 → 384-dim vectors
   │
   └─ [FAISS]     IndexFlatL2 — exact L2 nearest-neighbor index
 
@@ -290,7 +292,7 @@ Query
   │
   ├─ [IsRel]      Self-RAG relevance filter per chunk  (Asai §3)
   │
-  ├─ [Generate]   GPT-4o-mini + context + [SOURCE_N] citation markers  (Lewis §4)
+  ├─ [Generate]   Qwen3-8B 4-bit + context + [SOURCE_N] citations     (Lewis §4)
   │
   ├─ [IsSup]      Self-RAG groundedness check          (Asai §3)
   ├─ [IsUse]      Self-RAG utility check               (Asai §3)
@@ -302,14 +304,14 @@ Query
 st.markdown("---")
 
 # ── Render history ─────────────────────────────────────────────────────────────
-for ans in reversed(st.session_state["history"]):
+for ans in st.session_state["history"]:
     render_answer(ans)
 
 # ── Question input ─────────────────────────────────────────────────────────────
 engine = get_engine()
 
 if engine is None:
-    st.warning("⬅ Enter your OpenAI API key in the sidebar to get started.")
+    st.warning("⬅ Load the local models in the sidebar to get started.")
 elif engine.num_chunks == 0:
     st.info("⬅ Upload one or more PDFs to begin. The engine is ready.")
 else:
@@ -322,10 +324,18 @@ else:
         submitted = st.form_submit_button("Ask ↗", type="primary")
 
     if submitted and question.strip():
-        with st.spinner("Running Self-RAG pipeline…"):
-            try:
-                ans = engine.answer(question.strip())
-                st.session_state["history"].append(ans)
-                st.rerun()
-            except Exception as ex:
-                st.error(f"Error: {ex}")
+        progress = st.progress(0.0, text="Starting Self-RAG pipeline…")
+
+        def show_pipeline_progress(value: float, message: str):
+            progress.progress(max(0.0, min(value, 1.0)), text=message)
+
+        try:
+            ans = engine.answer(
+                question.strip(),
+                progress_callback=show_pipeline_progress,
+            )
+            st.session_state["history"].append(ans)
+            st.rerun()
+        except Exception as ex:
+            progress.empty()
+            st.error(f"Error: {ex}")
