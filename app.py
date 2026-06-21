@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import os
+import re
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 import streamlit as st
 
 from ragqa import RAGAnswer, WebRAGEngine, WebRAGError
+from ragqa.types import PipelineEvent
 
 load_dotenv()
 
@@ -22,7 +25,20 @@ st.set_page_config(
 st.markdown(
     """
 <style>
-.main .block-container { padding-top: 1.5rem; max-width: 1050px; }
+.main .block-container { padding-top: 0 !important; max-width: 1050px; }
+[data-testid="stSidebar"] { min-width: 230px !important; max-width: 230px !important; }
+.main .block-container > div:first-child { margin-top: 0 !important; }
+h1:first-of-type {
+  margin-top: 0 !important;
+  padding-top: 0 !important;
+  margin-bottom: 0 !important;
+  font-size: 1.6rem !important;
+  line-height: 1.2 !important;
+}
+h1:first-of-type + div p {
+  margin-top: 0 !important;
+  font-size: 0.8rem !important;
+}
 .route-direct, .route-web {
   display:inline-block; border-radius:5px; padding:3px 9px;
   font-size:12px; font-weight:650; margin-bottom:8px;
@@ -47,14 +63,38 @@ st.markdown(
   font-size: 13px;
   scroll-behavior: smooth;
 }
+.pipeline-trace-group {
+  border: 1px solid #e5e7eb;
+  border-radius: 0;
+  margin-bottom: 8px;
+  background: #ffffff;
+  overflow: hidden;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+}
+.pipeline-trace-group.started { border-left: 3px solid #3b82f6; }
+.pipeline-trace-group.completed { border-left: 3px solid #10b981; }
+.pipeline-trace-group.warning { border-left: 3px solid #f59e0b; }
+.pipeline-trace-group-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: #f3f4f6;
+}
+.pipeline-trace-group-header .pipeline-trace-stage {
+  font-size: 13px;
+}
+.pipeline-trace-group-body {
+  padding: 2px 10px 4px 10px;
+}
 .pipeline-trace-event {
   display: flex;
   align-items: flex-start;
   gap: 12px;
-  padding: 10px 0;
+  padding: 4px 0;
   border-left: 3px solid transparent;
   padding-left: 12px;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 .pipeline-trace-event.started {
   border-left-color: #3b82f6;
@@ -98,6 +138,72 @@ st.markdown(
   margin-top: 2px;
   font-size: 12px;
   word-break: break-word;
+}
+.domain-badge {
+  display: inline-block;
+  background: #ede9fe;
+  color: #5b21b6;
+  border-radius: 999px;
+  padding: 1px 9px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: lowercase;
+}
+.question-display {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  padding: 20px;
+  border-radius: 10px;
+  margin: 16px 0;
+  font-size: 20px;
+  line-height: 1.6;
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+  word-break: break-word;
+}
+.loader-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  padding: 40px 20px;
+  background: #f8f9fa;
+  border-radius: 10px;
+  border: 1px solid #e9ecef;
+  margin: 16px 0;
+}
+.spinner {
+  display: inline-block;
+  width: 40px;
+  height: 40px;
+  border: 4px solid #e9ecef;
+  border-top: 4px solid #667eea;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+.loader-text {
+  font-size: 14px;
+  color: #666;
+  font-weight: 500;
+}
+[data-testid="stForm"] [data-testid="stVerticalBlockBorderWrapper"] > div > [data-testid="stVerticalBlock"] {
+  align-items: flex-end !important;
+}
+[data-testid="stFormSubmitButton"] {
+  margin: 4px 0 0 0 !important;
+  width: 200px !important;
+  height: auto !important;
+  align-self: flex-end !important;
+  flex: 0 0 auto !important;
+}
+[data-testid="stFormSubmitButton"] button {
+  border-radius: 20px;
+  width: 200px !important;
+  white-space: nowrap;
+  padding: 6px 16px;
 }
 </style>
 <script>
@@ -185,11 +291,12 @@ def init_engine(progress_callback=None) -> None:
     )
 
 
-def render_answer(answer: RAGAnswer) -> None:
+def render_answer_simple(answer: RAGAnswer) -> None:
+    """Render just the question and answer text."""
     route_class = "route-web" if answer.route == "web" else "route-direct"
     route_label = "🌐 Web research" if answer.route == "web" else "⚡ Direct answer"
     st.markdown(f'<span class="{route_class}">{route_label}</span>', unsafe_allow_html=True)
-    st.markdown(f"**Q: {answer.question}**")
+    st.markdown(f"<span style='font-size: 1.3em; font-weight: 600;'>Q: {answer.question}</span>", unsafe_allow_html=True)
 
     rendered = answer.answer
     for number, citation in enumerate(answer.citations, start=1):
@@ -198,72 +305,112 @@ def render_answer(answer: RAGAnswer) -> None:
             f"[[{number}]]({citation.url} \"{citation.title}\")",
         )
     st.markdown(rendered)
+    st.caption(f"Completed in {answer.latency_ms:.0f} ms")
+    st.divider()
 
-    with st.expander("Routing details", expanded=False):
-        st.markdown(f"**Decision:** `{answer.route}`")
-        st.markdown(f"**Reason:** {answer.route_reason or 'No reason returned.'}")
-        if answer.search_query:
-            st.markdown(f"**Search query:** `{answer.search_query}`")
-            st.markdown(
-                f"**Temporary index:** {answer.indexed_source_count} sources · "
-                f"{answer.indexed_chunk_count} chunks"
-            )
 
-    if answer.pipeline_trace:
-        with st.expander(
-            f"Background pipeline trace ({len(answer.pipeline_trace)} events)",
-            expanded=False,
-        ):
-            icons = {
-                "started": "🔄",
-                "completed": "✅",
-                "info": "ℹ️",
-                "warning": "⚠️",
-            }
+_URL_RE = re.compile(r"https?://\S+")
+_SCORE_RE = re.compile(r"score (\d+\.\d+)")
 
-            trace_html = '<div class="pipeline-trace-container">'
-            for event in answer.pipeline_trace:
-                icon = icons.get(event.status, "•")
-                status_class = event.status.lower()
-                trace_html += f'''
-                <div class="pipeline-trace-event {status_class}">
-                    <div class="pipeline-trace-icon">{icon}</div>
-                    <div class="pipeline-trace-content">
-                        <div class="pipeline-trace-stage">{event.stage}</div>
-                        <div class="pipeline-trace-message">{event.message}</div>
-                    </div>
-                </div>
-                '''
-            trace_html += '</div>'
 
-            st.markdown(trace_html, unsafe_allow_html=True)
+def _site_name(url: str) -> str:
+    netloc = urlparse(url).netloc.removeprefix("www.")
+    labels = netloc.split(".")
+    return ".".join(labels[:-1]) if len(labels) > 1 else netloc
 
-            st.markdown(
-                f"<div style='text-align: right; font-size: 12px; color: #999; margin-top: 8px;'>"
-                f"Latest: {answer.pipeline_trace[-1].stage}</div>",
-                unsafe_allow_html=True,
-            )
 
-    if answer.source_reports:
-        succeeded = sum(
-            source.fetch_status == "succeeded" for source in answer.source_reports
+def _urls_to_domain_badges(text: str) -> str:
+    return _URL_RE.sub(
+        lambda match: f'<span class="domain-badge">{_site_name(match.group(0))}</span>',
+        text,
+    )
+
+
+def render_pipeline_timeline(events: list[PipelineEvent]) -> str:
+    """Render pipeline events grouped by stage as a scrollable timeline (HTML)."""
+    icon = {"started": "⏳", "completed": "✅", "info": "ℹ️", "warning": "⚠️"}
+    if not events:
+        return (
+            '<div class="pipeline-trace-container">'
+            '<div class="pipeline-trace-message">No pipeline activity yet.</div>'
+            "</div>"
         )
-        failed = len(answer.source_reports) - succeeded
-        with st.expander(
-            f"SerpAPI results and page browsing ({succeeded} succeeded, {failed} skipped)",
-            expanded=failed > 0,
-        ):
-            for source in answer.source_reports:
-                icon = "✅" if source.fetch_status == "succeeded" else "⚠️"
-                st.markdown(
-                    f"{icon} **#{source.search_rank} [{source.title}]({source.url})** — "
-                    f"`{source.fetch_status}`"
-                )
-                if source.snippet:
-                    st.caption(source.snippet)
-                if source.error:
-                    st.warning(source.error)
 
+    groups: list[tuple[str, list[PipelineEvent]]] = []
+    for event in events:
+        if groups and groups[-1][0] == event.stage:
+            groups[-1][1].append(event)
+        else:
+            groups.append((event.stage, [event]))
+
+    group_html = []
+    for stage, group_events in groups:
+        statuses = {item.status for item in group_events}
+        group_status = (
+            "warning" if "warning" in statuses
+            else "completed" if "completed" in statuses
+            else "started"
+        )
+        def trimmed_message(event: PipelineEvent) -> str:
+            message = event.message
+            if stage == "SerpAPI" and event.status == "info":
+                message = message.split(" | ", 1)[0]
+                if len(message) > 90:
+                    message = message[:90].rstrip() + "…"
+            if stage == "Retrieval" and event.status == "info":
+                prefix, sep, title = message.rpartition(") ")
+                if sep and len(title) > 70:
+                    title = title[:70].rstrip() + "…"
+                message = f"{prefix}{sep}{title}" if sep else message
+            if stage in ("SerpAPI", "Page fetching", "Retrieval"):
+                message = _urls_to_domain_badges(message)
+            if stage == "Retrieval":
+                message = _SCORE_RE.sub(
+                    lambda m: f"score <strong style='color:#2563eb;'>{m.group(1)}</strong>",
+                    message,
+                )
+            return message
+
+        sub_rows = "".join(
+            f'<div class="pipeline-trace-event {event.status}">'
+            f'<div class="pipeline-trace-icon">{icon.get(event.status, "•")}</div>'
+            f'<div class="pipeline-trace-content">'
+            f'<div class="pipeline-trace-message">{trimmed_message(event)}</div>'
+            f"</div></div>"
+            for event in group_events
+        )
+        group_html.append(
+            f'<div class="pipeline-trace-group {group_status}">'
+            f'<div class="pipeline-trace-group-header">'
+            f'<div class="pipeline-trace-icon">{icon.get(group_status, "•")}</div>'
+            f'<div class="pipeline-trace-stage">{stage} ({len(group_events)})</div>'
+            f"</div>"
+            f'<div class="pipeline-trace-group-body">{sub_rows}</div>'
+            f"</div>"
+        )
+
+    return f'<div class="pipeline-trace-container">{"".join(group_html)}</div>'
+
+
+def render_ares_evaluation(answer: RAGAnswer) -> None:
+    """Render ARES evaluation metrics."""
+    if answer.ares is not None:
+        with st.expander("ARES evaluation", expanded=True):
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Faithfulness", f"{answer.ares.faithfulness * 100:.0f}%")
+            col2.metric(
+                "Answer relevance", f"{answer.ares.answer_relevance * 100:.0f}%"
+            )
+            col3.metric(
+                "Context relevance", f"{answer.ares.context_relevance * 100:.0f}%"
+            )
+            col4.metric("Overall", f"{answer.ares.overall * 100:.0f}%")
+            for dimension, reasoning in answer.ares.details.items():
+                st.caption(f"**{dimension}:** {reasoning}")
+
+
+def render_answer_details(answer: RAGAnswer) -> None:
+    """Render all the detailed information about the answer."""
     if answer.retrieved_evidence:
         with st.expander(
             f"Retrieved FAISS chunks ({len(answer.retrieved_evidence)})",
@@ -272,8 +419,9 @@ def render_answer(answer: RAGAnswer) -> None:
             for index, evidence in enumerate(answer.retrieved_evidence, start=1):
                 st.markdown(
                     f"**#{index} [{evidence.title}]({evidence.url})** · "
-                    f"score `{evidence.retrieval_score:.4f}` · "
-                    f"{evidence.token_count} tokens"
+                    f"score <strong style='color:#2563eb;'>{evidence.retrieval_score:.4f}</strong> · "
+                    f"{evidence.token_count} tokens",
+                    unsafe_allow_html=True,
                 )
                 st.caption(evidence.excerpt)
                 st.divider()
@@ -291,26 +439,12 @@ def render_answer(answer: RAGAnswer) -> None:
     elif answer.route == "web":
         st.warning("The generated answer did not reference any retrieved source tags.")
 
-    if answer.ares is not None:
-        with st.expander("ARES evaluation", expanded=True):
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Faithfulness", f"{answer.ares.faithfulness * 100:.0f}%")
-            col2.metric(
-                "Answer relevance", f"{answer.ares.answer_relevance * 100:.0f}%"
-            )
-            col3.metric(
-                "Context relevance", f"{answer.ares.context_relevance * 100:.0f}%"
-            )
-            col4.metric("Overall", f"{answer.ares.overall * 100:.0f}%")
-            for dimension, reasoning in answer.ares.details.items():
-                st.caption(f"**{dimension}:** {reasoning}")
-
-    st.caption(f"Completed in {answer.latency_ms:.0f} ms")
-    st.divider()
-
-
 if "history" not in st.session_state:
     st.session_state["history"] = []
+if "current_result" not in st.session_state:
+    st.session_state["current_result"] = None
+if "current_question" not in st.session_state:
+    st.session_state["current_question"] = None
 
 
 with st.sidebar:
@@ -383,37 +517,65 @@ engine = get_engine()
 if engine is None:
     st.warning("Load the local models in the sidebar to begin.")
 else:
-    with st.form("question_form", clear_on_submit=True):
-        question = st.text_area(
-            "Ask anything",
-            placeholder="e.g. What changed in Python's latest stable release?",
-            height=90,
+    col_left, col_right = st.columns([1, 1], gap="medium")
+
+    with col_left:
+        st.subheader("Question & Answers")
+        with st.form("question_form", clear_on_submit=True):
+            question = st.text_area(
+                "Ask anything",
+                placeholder="e.g. What changed in Python's latest stable release?",
+                height=90,
+            )
+            submitted = st.form_submit_button("Ask ↗", type="primary")
+
+        pending_slot = st.empty()
+
+        st.markdown("---")
+        for item in reversed(st.session_state["history"]):
+            render_answer_simple(item)
+            render_ares_evaluation(item)
+            render_answer_details(item)
+
+    with col_right:
+        st.subheader("Background steps")
+        timeline_slot = st.empty()
+        last_trace = (
+            st.session_state["current_result"].pipeline_trace
+            if st.session_state["current_result"] is not None
+            else []
         )
-        submitted = st.form_submit_button("Ask ↗", type="primary")
+        timeline_slot.markdown(render_pipeline_timeline(last_trace), unsafe_allow_html=True)
 
     if submitted and question.strip():
-        progress = st.progress(0.0, text="Starting…")
-        live_status = st.status("Running the RAG pipeline…", expanded=True)
+        st.session_state["current_result"] = None
+        st.session_state["current_question"] = question
+        with pending_slot:
+            st.markdown(
+                f'<div class="question-display">❓ {question}</div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                '''<div class="loader-container">
+                    <div class="spinner"></div>
+                    <div class="loader-text">Generating answer...</div>
+                </div>''',
+                unsafe_allow_html=True,
+            )
 
-        def show_pipeline_progress(value: float, message: str) -> None:
-            progress.progress(max(0.0, min(value, 1.0)), text=message)
-            live_status.write(message)
+        events: list[PipelineEvent] = []
+
+        def show_pipeline_progress(value: float, stage: str, status: str, message: str) -> None:
+            events.append(PipelineEvent(stage, status, message))
+            timeline_slot.markdown(render_pipeline_timeline(events), unsafe_allow_html=True)
 
         try:
             result = engine.answer(question, show_pipeline_progress)
-            live_status.update(
-                label="Pipeline complete ✓", state="complete", expanded=True
-            )
             st.session_state["history"].append(result)
+            st.session_state["current_result"] = result
+            st.session_state["current_question"] = None
             st.rerun()
         except WebRAGError as exc:
-            progress.empty()
-            live_status.update(label="Pipeline failed", state="error", expanded=True)
-            st.error(str(exc))
+            pending_slot.error(str(exc))
         except Exception as exc:
-            progress.empty()
-            live_status.update(label="Pipeline failed", state="error", expanded=True)
-            st.error(f"Unexpected error: {exc}")
-
-for item in reversed(st.session_state["history"]):
-    render_answer(item)
+            pending_slot.error(f"Unexpected error: {exc}")

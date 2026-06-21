@@ -159,14 +159,14 @@ class WebPageFetcher:
                     pages_by_url[result.url] = future.result()
                     if event_callback:
                         event_callback(
-                            "completed", f"Fetched and parsed: {result.title} — {result.url}"
+                            "completed", f"{result.url} — fetched and parsed: {result.title}"
                         )
                 except Exception as exc:
                     failure = FetchFailure(result, str(exc))
                     failures.append(failure)
                     if event_callback:
                         event_callback(
-                            "warning", f"Skipped failed page: {result.url} — {exc}"
+                            "warning", f"{result.url} — skipped, page load didn't work"
                         )
         pages = [pages_by_url[result.url] for result in results if result.url in pages_by_url]
         if not pages:

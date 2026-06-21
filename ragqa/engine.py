@@ -100,7 +100,7 @@ class WebRAGEngine:
     def answer(
         self,
         question: str,
-        progress_callback: Callable[[float, str], None] | None = None,
+        progress_callback: Callable[[float, str, str, str], None] | None = None,
     ) -> RAGAnswer:
         question = question.strip()
         if not question:
@@ -116,7 +116,7 @@ class WebRAGEngine:
         ) -> None:
             trace.append(PipelineEvent(stage, status, message))
             if progress_callback:
-                progress_callback(value, message)
+                progress_callback(value, stage, status, message)
 
         report(
             0.03,
@@ -169,7 +169,7 @@ class WebRAGEngine:
                 0.22,
                 "SerpAPI",
                 "info",
-                f"Result #{result.rank}: {result.title} — {result.url}{snippet}",
+                f"{result.url} — #{result.rank} {result.title}{snippet}",
             )
         report(
             0.25,
@@ -224,23 +224,35 @@ class WebRAGEngine:
         )
         report(
             0.68,
-            "FAISS indexing and retrieval",
+            "FAISS indexing",
             "started",
-            "Embedding chunks, storing them in temporary cosine FAISS, and searching with the question embedding…",
+            f"Embedding {len(chunks)} chunks and storing them in a temporary cosine FAISS index…",
         )
         retrieved = self.retriever.retrieve(question, chunks)
+        report(
+            0.72,
+            "FAISS indexing",
+            "completed",
+            f"Indexed {len(chunks)} chunks into the temporary FAISS index.",
+        )
+        report(
+            0.74,
+            "Retrieval",
+            "started",
+            "Searching the index with the question embedding…",
+        )
         for index, item in enumerate(retrieved, start=1):
             report(
                 0.76,
-                "FAISS indexing and retrieval",
+                "Retrieval",
                 "info",
-                f"Retrieved #{index} (score {item.score:.4f}): {item.chunk.title} — {item.chunk.url}",
+                f"{item.chunk.url} — #{index} (score {item.score:.4f}) {item.chunk.title}",
             )
         report(
             0.78,
-            "FAISS indexing and retrieval",
+            "Retrieval",
             "completed",
-            f"Indexed {len(chunks)} chunks and selected {len(retrieved)} within the "
+            f"Selected {len(retrieved)} chunks within the "
             f"{self.config.max_context_tokens}-token context budget.",
         )
         report(
