@@ -78,6 +78,56 @@ def render_answer(answer: RAGAnswer) -> None:
                 f"{answer.indexed_chunk_count} chunks"
             )
 
+    if answer.pipeline_trace:
+        with st.expander(
+            f"Background pipeline trace ({len(answer.pipeline_trace)} events)",
+            expanded=False,
+        ):
+            icons = {
+                "started": "🔄",
+                "completed": "✅",
+                "info": "ℹ️",
+                "warning": "⚠️",
+            }
+            for event in answer.pipeline_trace:
+                st.markdown(
+                    f"{icons.get(event.status, '•')} **{event.stage}** — {event.message}"
+                )
+
+    if answer.source_reports:
+        succeeded = sum(
+            source.fetch_status == "succeeded" for source in answer.source_reports
+        )
+        failed = len(answer.source_reports) - succeeded
+        with st.expander(
+            f"SerpAPI results and page browsing ({succeeded} succeeded, {failed} skipped)",
+            expanded=failed > 0,
+        ):
+            for source in answer.source_reports:
+                icon = "✅" if source.fetch_status == "succeeded" else "⚠️"
+                st.markdown(
+                    f"{icon} **#{source.search_rank} [{source.title}]({source.url})** — "
+                    f"`{source.fetch_status}`"
+                )
+                if source.snippet:
+                    st.caption(source.snippet)
+                if source.error:
+                    st.warning(source.error)
+
+    if answer.retrieved_evidence:
+        with st.expander(
+            f"Retrieved FAISS chunks ({len(answer.retrieved_evidence)})",
+            expanded=False,
+        ):
+            for index, evidence in enumerate(answer.retrieved_evidence, start=1):
+                st.markdown(
+                    f"**#{index} [{evidence.title}]({evidence.url})** · "
+                    f"score `{evidence.retrieval_score:.4f}` · "
+                    f"{evidence.token_count} tokens"
+                )
+                st.caption(evidence.excerpt)
+                st.divider()
+
     if answer.citations:
         with st.expander(f"Sources ({len(answer.citations)})", expanded=True):
             for number, citation in enumerate(answer.citations, start=1):
@@ -90,6 +140,20 @@ def render_answer(answer: RAGAnswer) -> None:
                 st.divider()
     elif answer.route == "web":
         st.warning("The generated answer did not reference any retrieved source tags.")
+
+    if answer.ares is not None:
+        with st.expander("ARES evaluation", expanded=True):
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Faithfulness", f"{answer.ares.faithfulness * 100:.0f}%")
+            col2.metric(
+                "Answer relevance", f"{answer.ares.answer_relevance * 100:.0f}%"
+            )
+            col3.metric(
+                "Context relevance", f"{answer.ares.context_relevance * 100:.0f}%"
+            )
+            col4.metric("Overall", f"{answer.ares.overall * 100:.0f}%")
+            for dimension, reasoning in answer.ares.details.items():
+                st.caption(f"**{dimension}:** {reasoning}")
 
     st.caption(f"Completed in {answer.latency_ms:.0f} ms")
     st.divider()
@@ -179,19 +243,26 @@ else:
 
     if submitted and question.strip():
         progress = st.progress(0.0, text="Starting…")
+        live_status = st.status("Running the RAG pipeline…", expanded=True)
 
         def show_pipeline_progress(value: float, message: str) -> None:
             progress.progress(max(0.0, min(value, 1.0)), text=message)
+            live_status.write(message)
 
         try:
             result = engine.answer(question, show_pipeline_progress)
+            live_status.update(
+                label="Pipeline complete ✓", state="complete", expanded=True
+            )
             st.session_state["history"].append(result)
             st.rerun()
         except WebRAGError as exc:
             progress.empty()
+            live_status.update(label="Pipeline failed", state="error", expanded=True)
             st.error(str(exc))
         except Exception as exc:
             progress.empty()
+            live_status.update(label="Pipeline failed", state="error", expanded=True)
             st.error(f"Unexpected error: {exc}")
 
 for item in reversed(st.session_state["history"]):

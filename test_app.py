@@ -2,7 +2,14 @@
 
 from streamlit.testing.v1 import AppTest
 
-from ragqa import Citation, RAGAnswer
+from ragqa import (
+    ARESScore,
+    Citation,
+    PipelineEvent,
+    RAGAnswer,
+    RetrievedEvidence,
+    SourceReport,
+)
 
 
 def test_initial_ui_is_web_first_and_has_no_pdf_uploader():
@@ -31,6 +38,38 @@ def test_web_answer_renders_route_status_index_details_and_clickable_source():
                 retrieval_score=0.91,
             )
         ],
+        source_reports=[
+            SourceReport(
+                title="Example source",
+                url="https://example.com/source",
+                search_rank=1,
+                snippet="A useful search result",
+                fetch_status="succeeded",
+            ),
+            SourceReport(
+                title="Blocked source",
+                url="https://example.com/blocked",
+                search_rank=2,
+                snippet="A blocked result",
+                fetch_status="failed",
+                error="The page could not be parsed",
+            ),
+        ],
+        retrieved_evidence=[
+            RetrievedEvidence(
+                title="Example source",
+                url="https://example.com/source",
+                search_rank=1,
+                excerpt="Retrieved grounding chunk",
+                retrieval_score=0.91,
+                token_count=250,
+            )
+        ],
+        pipeline_trace=[
+            PipelineEvent("Routing", "completed", "Selected WEB"),
+            PipelineEvent("Page fetching", "warning", "Skipped one failed page"),
+        ],
+        ares=ARESScore(0.9, 0.8, 0.85, 0.85, {"faithfulness": "Supported"}),
         indexed_source_count=1,
         indexed_chunk_count=3,
         latency_ms=12,
@@ -46,3 +85,7 @@ def test_web_answer_renders_route_status_index_details_and_clickable_source():
     assert "latest changes" in markdown
     assert "1 sources · 3 chunks" in markdown
     assert "[Example source](https://example.com/source)" in markdown
+    expander_labels = [item.label for item in app.expander]
+    assert any("Background pipeline trace" in label for label in expander_labels)
+    assert any("Retrieved FAISS chunks" in label for label in expander_labels)
+    assert len(app.metric) == 4

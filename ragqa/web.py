@@ -13,7 +13,7 @@ import trafilatura
 from pypdf import PdfReader
 
 from .config import PipelineConfig
-from .types import SearchResult, WebPage, WebRAGError
+from .types import FetchFailure, FetchOutcome, SearchResult, WebPage, WebRAGError
 
 
 class SerpApiSearch:
@@ -144,20 +144,34 @@ class WebPageFetcher:
         except Exception as exc:
             raise WebRAGError(f"Could not parse {result.url}: {exc}") from exc
 
-    def fetch_all(self, results: list[SearchResult]) -> list[WebPage]:
+    def fetch_all(
+        self,
+        results: list[SearchResult],
+        event_callback: Callable[[str, str], None] | None = None,
+    ) -> FetchOutcome:
         pages_by_url: dict[str, WebPage] = {}
-        failures: list[str] = []
+        failures: list[FetchFailure] = []
         with ThreadPoolExecutor(max_workers=len(results)) as pool:
             futures = {pool.submit(self.fetch, result): result for result in results}
             for future in as_completed(futures):
                 result = futures[future]
                 try:
                     pages_by_url[result.url] = future.result()
+                    if event_callback:
+                        event_callback(
+                            "completed", f"Fetched and parsed: {result.title} — {result.url}"
+                        )
                 except Exception as exc:
-                    failures.append(str(exc))
-        if failures:
+                    failure = FetchFailure(result, str(exc))
+                    failures.append(failure)
+                    if event_callback:
+                        event_callback(
+                            "warning", f"Skipped failed page: {result.url} — {exc}"
+                        )
+        pages = [pages_by_url[result.url] for result in results if result.url in pages_by_url]
+        if not pages:
             raise WebRAGError(
-                "Web page ingestion stopped because every selected result must succeed. "
-                + " | ".join(failures)
+                "None of the selected web pages could be fetched and parsed. "
+                + " | ".join(failure.error for failure in failures)
             )
-        return [pages_by_url[result.url] for result in results]
+        return FetchOutcome(pages, failures)

@@ -14,6 +14,7 @@ Question → Qwen3 route decision
                     → temporary FAISS cosine index
                     → retrieve within a 1,400-token budget
                     → grounded answer with URL citations
+                    → ARES quality evaluation
 ```
 
 Web indexes exist for one request only. Full fetched pages, chunks, embeddings, and the FAISS index are released after the answer; chat history retains only compact citation metadata and excerpts.
@@ -44,8 +45,10 @@ On first launch, **Load local models** downloads Qwen3 and `all-MiniLM-L6-v2`. A
 - The first five unique HTTP(S) results are fetched concurrently.
 - HTML is extracted with `trafilatura`; web-hosted PDF results use `pypdf`.
 - Responses are limited to 5 MB and requests have bounded timeouts.
-- The pipeline is intentionally strict: if any selected page fails to download or parse, the request stops and reports the failing URL. It does not answer from snippets or partial evidence.
+- Failed or blocked pages are reported and skipped; the pipeline continues with successful pages. It stops only when no selected page can be extracted.
 - Generated web answers may use only the chunks included in their prompt and cite them with clickable source links.
+- The UI streams routing, SerpAPI results, page fetches, chunking, FAISS indexing/retrieval, generation, and ARES evaluation live, then stores the trace with the answer.
+- Answer details include every search/fetch outcome, retrieved chunk excerpts and scores, citations, and ARES faithfulness/relevance scores.
 
 ## Tests
 
@@ -55,7 +58,7 @@ Tests use fake model, search, fetch, and embedding components, so they consume n
 pytest -q
 ```
 
-They cover direct routing, safe router fallback, the complete web path, URL deduplication, missing credentials, strict fetch failure, token-aware chunking, context limits, source diversity, and citations.
+They cover direct routing, safe router fallback, the complete web path, URL deduplication, missing credentials, partial and total fetch failure, token-aware chunking, context limits, source diversity, citations, trace details, and ARES scores.
 
 ## Files
 
@@ -66,6 +69,7 @@ ragqa/
 ├── web.py          # SerpAPI discovery and HTML/PDF extraction
 ├── retrieval.py    # Chunking and temporary FAISS search
 ├── generation.py   # Direct and grounded generation prompts
+├── evaluation.py   # ARES-style answer quality scoring
 ├── llm.py          # Local Qwen loading and generation adapter
 ├── types.py        # Shared data contracts and errors
 └── config.py       # Pipeline defaults

@@ -37,6 +37,19 @@ class FakeLLM:
             )
         if "Web passages:" in content:
             return "The retrieved pages agree on the result [SOURCE_1] [SOURCE_2]."
+        if "ARES-style evaluator" in content:
+            return json.dumps(
+                {
+                    "context_relevance": 0.88,
+                    "faithfulness": 0.92,
+                    "answer_relevance": 0.9,
+                    "reasoning": {
+                        "context": "Useful passages",
+                        "faithfulness": "Claims are supported",
+                        "relevance": "The question is answered",
+                    },
+                }
+            )
         return "This is a direct answer."
 
 
@@ -129,6 +142,10 @@ def test_web_route_searches_indexes_retrieves_and_cites():
         results[1].url,
     }
     assert answer.indexed_chunk_count > len(answer.citations)
+    assert len(answer.source_reports) == 2
+    assert answer.retrieved_evidence
+    assert answer.ares.overall == 0.9
+    assert any(event.stage == "SerpAPI" for event in answer.pipeline_trace)
 
 
 def test_missing_key_only_fails_when_web_route_is_used():
@@ -154,7 +171,7 @@ def test_search_filters_invalid_urls_and_deduplicates():
     ]
 
 
-def test_any_page_failure_stops_entire_ingestion():
+def test_page_failure_is_reported_while_successful_pages_continue():
     results = [result(1), result(2)]
 
     def fetcher(item):
@@ -163,7 +180,20 @@ def test_any_page_failure_stops_entire_ingestion():
         return page(item)
 
     engine = make_engine(page_fetcher=fetcher)
-    with pytest.raises(WebRAGError, match="every selected result must succeed"):
+    outcome = engine._fetch_all(results)
+    assert [item.result.url for item in outcome.pages] == [results[0].url]
+    assert len(outcome.failures) == 1
+    assert outcome.failures[0].result.url == results[1].url
+
+
+def test_all_page_failures_still_stop_ingestion():
+    results = [result(1), result(2)]
+
+    def fetcher(item):
+        raise WebRAGError(f"Could not fetch {item.url}: timeout")
+
+    engine = make_engine(page_fetcher=fetcher)
+    with pytest.raises(WebRAGError, match="None of the selected web pages"):
         engine._fetch_all(results)
 
 
