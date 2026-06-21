@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import os
 
+from dotenv import load_dotenv
 import streamlit as st
 
 from ragqa import RAGAnswer, WebRAGEngine, WebRAGError
+
+load_dotenv()
 
 
 st.set_page_config(
@@ -26,6 +29,134 @@ st.markdown(
 }
 .route-direct { background:#e0f2fe; color:#075985; }
 .route-web { background:#dcfce7; color:#166534; }
+.stStatus > div:nth-child(n+2) {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.5);
+}
+.stStatus > div:nth-child(n+2) code {
+  color: rgba(0, 0, 0, 0.4);
+}
+.pipeline-trace-container {
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  background: #f9f9f9;
+  height: 400px;
+  overflow-y: auto;
+  padding: 16px;
+  font-family: monospace;
+  font-size: 13px;
+  scroll-behavior: smooth;
+}
+.pipeline-trace-event {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 0;
+  border-left: 3px solid transparent;
+  padding-left: 12px;
+  margin-bottom: 4px;
+}
+.pipeline-trace-event.started {
+  border-left-color: #3b82f6;
+  background: rgba(59, 130, 246, 0.05);
+  padding: 8px 12px;
+  border-radius: 4px;
+}
+.pipeline-trace-event.completed {
+  border-left-color: #10b981;
+  background: rgba(16, 185, 129, 0.05);
+  padding: 8px 12px;
+  border-radius: 4px;
+}
+.pipeline-trace-event.info {
+  border-left-color: #6366f1;
+  background: rgba(99, 102, 241, 0.05);
+  padding: 8px 12px;
+  border-radius: 4px;
+}
+.pipeline-trace-event.warning {
+  border-left-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.05);
+  padding: 8px 12px;
+  border-radius: 4px;
+}
+.pipeline-trace-icon {
+  font-size: 16px;
+  min-width: 24px;
+  flex-shrink: 0;
+}
+.pipeline-trace-content {
+  flex: 1;
+  min-width: 0;
+}
+.pipeline-trace-stage {
+  font-weight: 600;
+  color: #1f2937;
+}
+.pipeline-trace-message {
+  color: #4b5563;
+  margin-top: 2px;
+  font-size: 12px;
+  word-break: break-word;
+}
+</style>
+<script>
+function autoScrollTraceContainer() {
+  const container = document.querySelector('.pipeline-trace-container');
+  if (container) {
+    container.scrollTop = container.scrollHeight;
+  }
+}
+function autoScrollStatusBox() {
+  const statusContent = document.querySelector('.stStatus > div > div:last-child');
+  if (statusContent) {
+    statusContent.scrollTop = statusContent.scrollHeight;
+  }
+}
+setTimeout(autoScrollTraceContainer, 100);
+setInterval(autoScrollStatusBox, 500);
+</script>
+
+<style>
+.stStatus {
+  max-width: 100% !important;
+  height: 300px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  border: 1px solid #e0e0e0 !important;
+  border-radius: 8px !important;
+}
+.stStatus > div {
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100% !important;
+}
+.stStatus > div > div:first-child {
+  flex-shrink: 0;
+  padding: 12px 16px !important;
+  border-bottom: 1px solid #e0e0e0;
+  background: #ffffff;
+  border-radius: 8px 8px 0 0;
+}
+.stStatus > div > div:last-child {
+  flex: 1;
+  overflow-y: auto !important;
+  scroll-behavior: smooth;
+  padding: 12px 16px !important;
+  background: #f9f9f9;
+  border-radius: 0 0 8px 8px;
+}
+.stStatus > div > div:last-child > div {
+  font-family: monospace;
+  font-size: 13px;
+  color: #4b5563;
+  padding: 8px 12px;
+  border-left: 3px solid #3b82f6;
+  background: rgba(59, 130, 246, 0.03);
+  border-radius: 4px;
+  margin-bottom: 6px;
+  word-break: break-word;
+}
 </style>
 """,
     unsafe_allow_html=True,
@@ -89,10 +220,29 @@ def render_answer(answer: RAGAnswer) -> None:
                 "info": "ℹ️",
                 "warning": "⚠️",
             }
+
+            trace_html = '<div class="pipeline-trace-container">'
             for event in answer.pipeline_trace:
-                st.markdown(
-                    f"{icons.get(event.status, '•')} **{event.stage}** — {event.message}"
-                )
+                icon = icons.get(event.status, "•")
+                status_class = event.status.lower()
+                trace_html += f'''
+                <div class="pipeline-trace-event {status_class}">
+                    <div class="pipeline-trace-icon">{icon}</div>
+                    <div class="pipeline-trace-content">
+                        <div class="pipeline-trace-stage">{event.stage}</div>
+                        <div class="pipeline-trace-message">{event.message}</div>
+                    </div>
+                </div>
+                '''
+            trace_html += '</div>'
+
+            st.markdown(trace_html, unsafe_allow_html=True)
+
+            st.markdown(
+                f"<div style='text-align: right; font-size: 12px; color: #999; margin-top: 8px;'>"
+                f"Latest: {answer.pipeline_trace[-1].stage}</div>",
+                unsafe_allow_html=True,
+            )
 
     if answer.source_reports:
         succeeded = sum(

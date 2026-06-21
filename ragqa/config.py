@@ -7,7 +7,7 @@ from dataclasses import dataclass
 class PipelineConfig:
     embed_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     gen_model: str = "Qwen3-8B (4-bit)"
-    search_result_limit: int = 5
+    search_result_limit: int = 10
     search_timeout_seconds: int = 15
     fetch_timeout_seconds: int = 12
     max_response_bytes: int = 5 * 1024 * 1024
