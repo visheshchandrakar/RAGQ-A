@@ -158,9 +158,7 @@ class WebPageFetcher:
                 try:
                     pages_by_url[result.url] = future.result()
                     if event_callback:
-                        event_callback(
-                            "completed", f"{result.url} — fetched and parsed: {result.title}"
-                        )
+                        event_callback("completed", f"{result.url} — {result.title}")
                 except Exception as exc:
                     failure = FetchFailure(result, str(exc))
                     failures.append(failure)

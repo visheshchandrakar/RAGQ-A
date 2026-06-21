@@ -18,9 +18,9 @@ def test_initial_ui_is_web_first_and_has_no_pdf_uploader():
     assert not app.exception
     assert "Direct-or-Web RAG Assistant" in [title.value for title in app.title]
     assert "Load local models" in [button.label for button in app.button]
+    assert any("/architecture" in item.value for item in app.markdown)
+    assert "Pipeline architecture" not in [item.label for item in app.expander]
     assert len(app.get("file_uploader")) == 0
-
-
 def test_web_answer_renders_route_status_index_details_and_clickable_source():
     answer = RAGAnswer(
         question="What changed?",

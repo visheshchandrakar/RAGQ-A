@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import html
 import os
 import re
+from pathlib import Path
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
@@ -22,251 +24,22 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-st.markdown(
-    """
-<style>
-.main .block-container { padding-top: 0 !important; max-width: 1050px; }
-[data-testid="stSidebar"] { min-width: 230px !important; max-width: 230px !important; }
-.main .block-container > div:first-child { margin-top: 0 !important; }
-h1:first-of-type {
-  margin-top: 0 !important;
-  padding-top: 0 !important;
-  margin-bottom: 0 !important;
-  font-size: 1.6rem !important;
-  line-height: 1.2 !important;
-}
-h1:first-of-type + div p {
-  margin-top: 0 !important;
-  font-size: 0.8rem !important;
-}
-.route-direct, .route-web {
-  display:inline-block; border-radius:5px; padding:3px 9px;
-  font-size:12px; font-weight:650; margin-bottom:8px;
-}
-.route-direct { background:#e0f2fe; color:#075985; }
-.route-web { background:#dcfce7; color:#166534; }
-.stStatus > div:nth-child(n+2) {
-  font-size: 12px;
-  color: rgba(0, 0, 0, 0.5);
-}
-.stStatus > div:nth-child(n+2) code {
-  color: rgba(0, 0, 0, 0.4);
-}
-.pipeline-trace-container {
-  border: 1px solid #e0e0e0;
-  border-radius: 8px;
-  background: #f9f9f9;
-  height: 400px;
-  overflow-y: auto;
-  padding: 16px;
-  font-family: monospace;
-  font-size: 13px;
-  scroll-behavior: smooth;
-}
-.pipeline-trace-group {
-  border: 1px solid #e5e7eb;
-  border-radius: 0;
-  margin-bottom: 8px;
-  background: #ffffff;
-  overflow: hidden;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
-}
-.pipeline-trace-group.started { border-left: 3px solid #3b82f6; }
-.pipeline-trace-group.completed { border-left: 3px solid #10b981; }
-.pipeline-trace-group.warning { border-left: 3px solid #f59e0b; }
-.pipeline-trace-group-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 10px;
-  background: #f3f4f6;
-}
-.pipeline-trace-group-header .pipeline-trace-stage {
-  font-size: 13px;
-}
-.pipeline-trace-group-body {
-  padding: 2px 10px 4px 10px;
-}
-.pipeline-trace-event {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 4px 0;
-  border-left: 3px solid transparent;
-  padding-left: 12px;
-  margin-bottom: 2px;
-}
-.pipeline-trace-event.started {
-  border-left-color: #3b82f6;
-  background: rgba(59, 130, 246, 0.05);
-  padding: 8px 12px;
-  border-radius: 4px;
-}
-.pipeline-trace-event.completed {
-  border-left-color: #10b981;
-  background: rgba(16, 185, 129, 0.05);
-  padding: 8px 12px;
-  border-radius: 4px;
-}
-.pipeline-trace-event.info {
-  border-left-color: #6366f1;
-  background: rgba(99, 102, 241, 0.05);
-  padding: 8px 12px;
-  border-radius: 4px;
-}
-.pipeline-trace-event.warning {
-  border-left-color: #f59e0b;
-  background: rgba(245, 158, 11, 0.05);
-  padding: 8px 12px;
-  border-radius: 4px;
-}
-.pipeline-trace-icon {
-  font-size: 16px;
-  min-width: 24px;
-  flex-shrink: 0;
-}
-.pipeline-trace-content {
-  flex: 1;
-  min-width: 0;
-}
-.pipeline-trace-stage {
-  font-weight: 600;
-  color: #1f2937;
-}
-.pipeline-trace-message {
-  color: #4b5563;
-  margin-top: 2px;
-  font-size: 12px;
-  word-break: break-word;
-}
-.domain-badge {
-  display: inline-block;
-  background: #ede9fe;
-  color: #5b21b6;
-  border-radius: 999px;
-  padding: 1px 9px;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: lowercase;
-}
-.question-display {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
-  padding: 20px;
-  border-radius: 10px;
-  margin: 16px 0;
-  font-size: 20px;
-  line-height: 1.6;
-  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
-  word-break: break-word;
-}
-.loader-container {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 20px;
-  padding: 40px 20px;
-  background: #f8f9fa;
-  border-radius: 10px;
-  border: 1px solid #e9ecef;
-  margin: 16px 0;
-}
-.spinner {
-  display: inline-block;
-  width: 40px;
-  height: 40px;
-  border: 4px solid #e9ecef;
-  border-top: 4px solid #667eea;
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-}
-@keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
-}
-.loader-text {
-  font-size: 14px;
-  color: #666;
-  font-weight: 500;
-}
-[data-testid="stForm"] [data-testid="stVerticalBlockBorderWrapper"] > div > [data-testid="stVerticalBlock"] {
-  align-items: flex-end !important;
-}
-[data-testid="stFormSubmitButton"] {
-  margin: 4px 0 0 0 !important;
-  width: 200px !important;
-  height: auto !important;
-  align-self: flex-end !important;
-  flex: 0 0 auto !important;
-}
-[data-testid="stFormSubmitButton"] button {
-  border-radius: 20px;
-  width: 200px !important;
-  white-space: nowrap;
-  padding: 6px 16px;
-}
-</style>
-<script>
-function autoScrollTraceContainer() {
-  const container = document.querySelector('.pipeline-trace-container');
-  if (container) {
-    container.scrollTop = container.scrollHeight;
-  }
-}
-function autoScrollStatusBox() {
-  const statusContent = document.querySelector('.stStatus > div > div:last-child');
-  if (statusContent) {
-    statusContent.scrollTop = statusContent.scrollHeight;
-  }
-}
-setTimeout(autoScrollTraceContainer, 100);
-setInterval(autoScrollStatusBox, 500);
-</script>
+UI_MARKUP_PATH = Path(__file__).with_name("app_ui.html")
+st.markdown(UI_MARKUP_PATH.read_text(encoding="utf-8"), unsafe_allow_html=True)
 
-<style>
-.stStatus {
-  max-width: 100% !important;
-  height: 300px !important;
-  display: flex !important;
-  flex-direction: column !important;
-  border: 1px solid #e0e0e0 !important;
-  border-radius: 8px !important;
-}
-.stStatus > div {
-  display: flex !important;
-  flex-direction: column !important;
-  height: 100% !important;
-}
-.stStatus > div > div:first-child {
-  flex-shrink: 0;
-  padding: 12px 16px !important;
-  border-bottom: 1px solid #e0e0e0;
-  background: #ffffff;
-  border-radius: 8px 8px 0 0;
-}
-.stStatus > div > div:last-child {
-  flex: 1;
-  overflow-y: auto !important;
-  scroll-behavior: smooth;
-  padding: 12px 16px !important;
-  background: #f9f9f9;
-  border-radius: 0 0 8px 8px;
-}
-.stStatus > div > div:last-child > div {
-  font-family: monospace;
-  font-size: 13px;
-  color: #4b5563;
-  padding: 8px 12px;
-  border-left: 3px solid #3b82f6;
-  background: rgba(59, 130, 246, 0.03);
-  border-radius: 4px;
-  margin-bottom: 6px;
-  word-break: break-word;
-}
-</style>
-""",
-    unsafe_allow_html=True,
-)
+USER_ICON = """
+<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+  <path d="M12 12.25a4.25 4.25 0 1 0 0-8.5 4.25 4.25 0 0 0 0 8.5Z"/>
+  <path d="M4.5 20.25c.45-3.65 3.05-5.75 7.5-5.75s7.05 2.1 7.5 5.75"/>
+</svg>
+"""
+
+AI_ICON = """
+<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+  <path d="M12 2.75c.55 3.8 2.7 5.95 6.5 6.5-3.8.55-5.95 2.7-6.5 6.5-.55-3.8-2.7-5.95-6.5-6.5 3.8-.55 5.95-2.7 6.5-6.5Z"/>
+  <path d="M18.25 15.25c.25 1.7 1.3 2.75 3 3-1.7.25-2.75 1.3-3 3-.25-1.7-1.3-2.75-3-3 1.7-.25 2.75-1.3 3-3Z"/>
+</svg>
+"""
 
 
 def get_serpapi_key() -> str:
@@ -291,12 +64,22 @@ def init_engine(progress_callback=None) -> None:
     )
 
 
+def render_question(question: str) -> None:
+    """Render the question consistently while loading and after completion."""
+    st.markdown(
+        '<div class="question-row">'
+        f'<div class="message-avatar user-avatar" aria-label="You">{USER_ICON}</div>'
+        f'<div class="question-display">{html.escape(question)}</div>'
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
 def render_answer_simple(answer: RAGAnswer) -> None:
     """Render just the question and answer text."""
+    render_question(answer.question)
     route_class = "route-web" if answer.route == "web" else "route-direct"
-    route_label = "🌐 Web research" if answer.route == "web" else "⚡ Direct answer"
-    st.markdown(f'<span class="{route_class}">{route_label}</span>', unsafe_allow_html=True)
-    st.markdown(f"<span style='font-size: 1.3em; font-weight: 600;'>Q: {answer.question}</span>", unsafe_allow_html=True)
+    route_label = "Web research" if answer.route == "web" else "Direct answer"
 
     rendered = answer.answer
     for number, citation in enumerate(answer.citations, start=1):
@@ -304,8 +87,19 @@ def render_answer_simple(answer: RAGAnswer) -> None:
             citation.tag,
             f"[[{number}]]({citation.url} \"{citation.title}\")",
         )
-    st.markdown(rendered)
-    st.caption(f"Completed in {answer.latency_ms:.0f} ms")
+
+    st.markdown(
+        '<div class="answer-meta-row">'
+        f'<div class="message-avatar ai-avatar" aria-label="AI assistant">{AI_ICON}</div>'
+        f'<span class="{route_class}">{route_label}</span>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    _, answer_column = st.columns([0.07, 0.93], gap="small")
+    with answer_column:
+        st.markdown(rendered)
+        st.caption(f"Completed in {answer.latency_ms / 1000:.1f} s")
     st.divider()
 
 
@@ -379,11 +173,20 @@ def render_pipeline_timeline(events: list[PipelineEvent]) -> str:
             f"</div></div>"
             for event in group_events
         )
+        progress_spinner = (
+            '<div class="pipeline-trace-progress" role="status">'
+            '<strong>In progress</strong>'
+            '<div class="pipeline-trace-spinner" aria-hidden="true"></div>'
+            '</div>'
+            if group_status == "started"
+            else ""
+        )
         group_html.append(
             f'<div class="pipeline-trace-group {group_status}">'
             f'<div class="pipeline-trace-group-header">'
             f'<div class="pipeline-trace-icon">{icon.get(group_status, "•")}</div>'
             f'<div class="pipeline-trace-stage">{stage} ({len(group_events)})</div>'
+            f"{progress_spinner}"
             f"</div>"
             f'<div class="pipeline-trace-group-body">{sub_rows}</div>'
             f"</div>"
@@ -448,8 +251,13 @@ if "current_question" not in st.session_state:
 
 
 with st.sidebar:
-    st.title("🌐 Web RAG Assistant")
-    st.caption("Local Qwen3 · SerpAPI · temporary FAISS retrieval")
+    st.markdown(
+        '<nav class="app-navigation">'
+        '<a class="active" href="/">💬 Assistant</a>'
+        '<a href="/architecture">🏗️ Architecture</a>'
+        "</nav>",
+        unsafe_allow_html=True,
+    )
     st.markdown("---")
 
     if get_engine() is None:
@@ -464,33 +272,25 @@ with st.sidebar:
             progress.progress(1.0, text="Local models are ready ✓")
             st.rerun()
     else:
-        st.success("Local models loaded ✓")
-
-    if get_serpapi_key():
-        st.success("SERPAPI_KEY configured ✓")
-    else:
-        st.warning("SERPAPI_KEY is not configured. Direct answers still work.")
-        st.caption("Set it as an environment variable or Streamlit secret.")
-
-    st.markdown("---")
-    with st.expander("Pipeline settings"):
         st.markdown(
             f"""
-| Parameter | Value |
-|---|---|
-| Generation model | `{WebRAGEngine.GEN_MODEL}` |
-| Embedding model | `{WebRAGEngine.EMBED_MODEL}` |
-| Search results | {WebRAGEngine.SEARCH_RESULT_LIMIT} |
-| Chunking | {WebRAGEngine.CHUNK_SIZE} / {WebRAGEngine.CHUNK_OVERLAP} tokens |
-| Context budget | {WebRAGEngine.MAX_CONTEXT_TOKENS} tokens |
-| Vector index | `IndexFlatIP` (cosine) |
-| Persistence | Per-query only |
-"""
+<div class="model-ready-card">
+  <div class="model-ready-header">
+    <span class="model-ready-dot"></span>
+    <span>Models ready</span>
+  </div>
+  <div class="model-ready-item">
+    <span class="model-ready-label">Generation</span>
+    <strong>{html.escape(WebRAGEngine.GEN_MODEL)}</strong>
+  </div>
+  <div class="model-ready-item">
+    <span class="model-ready-label">Embedding</span>
+    <strong>{html.escape(WebRAGEngine.EMBED_MODEL)}</strong>
+  </div>
+</div>
+""",
+            unsafe_allow_html=True,
         )
-
-    if st.button("Clear history"):
-        st.session_state["history"] = []
-        st.rerun()
 
 
 st.title("Direct-or-Web RAG Assistant")
@@ -499,20 +299,6 @@ st.caption(
     "then grounds web answers in a temporary FAISS index."
 )
 
-with st.expander("Pipeline architecture", expanded=False):
-    st.code(
-        """Question → local LLM router
-  ├─ DIRECT → local answer
-  └─ WEB → SerpAPI → fetch top pages → extract and chunk
-                                  → embed → temporary cosine FAISS
-                                  → retrieve within token budget
-                                  → grounded answer + URL citations
-
-The temporary page content and FAISS index are discarded after each answer.""",
-        language="text",
-    )
-
-st.markdown("---")
 engine = get_engine()
 if engine is None:
     st.warning("Load the local models in the sidebar to begin.")
@@ -521,21 +307,38 @@ else:
 
     with col_left:
         st.subheader("Question & Answers")
-        with st.form("question_form", clear_on_submit=True):
-            question = st.text_area(
-                "Ask anything",
-                placeholder="e.g. What changed in Python's latest stable release?",
-                height=90,
-            )
-            submitted = st.form_submit_button("Ask ↗", type="primary")
+        with st.container(height=800, border=False):
+            with st.form("question_form", clear_on_submit=True):
+                question = st.text_area(
+                    "Ask anything",
+                    placeholder="e.g. What changed in Python's latest stable release?",
+                    height=90,
+                )
+                submitted = st.form_submit_button("Ask ↗", type="primary")
 
-        pending_slot = st.empty()
+            submitted_question = question.strip() if submitted else ""
+            if submitted_question:
+                st.session_state["current_question"] = submitted_question
 
-        st.markdown("---")
-        for item in reversed(st.session_state["history"]):
-            render_answer_simple(item)
-            render_ares_evaluation(item)
-            render_answer_details(item)
+            st.markdown("---")
+
+            if st.session_state["current_question"]:
+                render_question(st.session_state["current_question"])
+
+            pending_slot = st.empty()
+            if submitted_question:
+                pending_slot.markdown(
+                    '''<div class="loader-container">
+                        <div class="spinner"></div>
+                        <div class="loader-text">Generating answer...</div>
+                    </div>''',
+                    unsafe_allow_html=True,
+                )
+
+            for item in reversed(st.session_state["history"]):
+                render_answer_simple(item)
+                render_ares_evaluation(item)
+                render_answer_details(item)
 
     with col_right:
         st.subheader("Background steps")
@@ -547,21 +350,8 @@ else:
         )
         timeline_slot.markdown(render_pipeline_timeline(last_trace), unsafe_allow_html=True)
 
-    if submitted and question.strip():
+    if submitted_question:
         st.session_state["current_result"] = None
-        st.session_state["current_question"] = question
-        with pending_slot:
-            st.markdown(
-                f'<div class="question-display">❓ {question}</div>',
-                unsafe_allow_html=True,
-            )
-            st.markdown(
-                '''<div class="loader-container">
-                    <div class="spinner"></div>
-                    <div class="loader-text">Generating answer...</div>
-                </div>''',
-                unsafe_allow_html=True,
-            )
 
         events: list[PipelineEvent] = []
 
@@ -570,7 +360,7 @@ else:
             timeline_slot.markdown(render_pipeline_timeline(events), unsafe_allow_html=True)
 
         try:
-            result = engine.answer(question, show_pipeline_progress)
+            result = engine.answer(submitted_question, show_pipeline_progress)
             st.session_state["history"].append(result)
             st.session_state["current_result"] = result
             st.session_state["current_question"] = None

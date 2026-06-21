@@ -146,6 +146,14 @@ def test_web_route_searches_indexes_retrieves_and_cites():
     assert answer.retrieved_evidence
     assert answer.ares.overall == 0.9
     assert any(event.stage == "SerpAPI" for event in answer.pipeline_trace)
+    fetch_events = [
+        event
+        for event in answer.pipeline_trace
+        if event.stage == "Page fetching" and event.status == "completed"
+    ]
+    assert {event.message for event in fetch_events} == {
+        f"{item.url} — {item.title}" for item in results
+    }
 
 
 def test_missing_key_only_fails_when_web_route_is_used():

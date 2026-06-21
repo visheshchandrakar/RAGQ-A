@@ -1,0 +1,4 @@
+- the text length of serp api group icons to be atleast 36chars
+- ask button align to right side
+- create proper architecture to explain
+- make ui better
