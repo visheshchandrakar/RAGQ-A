@@ -106,7 +106,7 @@ def selfrag_badge(value: bool | None, yes_label="Yes", no_label="No") -> str:
 
 def render_answer(ans: RAGAnswer):
     """Render a complete RAGAnswer in the chat panel."""
-    st.markdown(f"**Q:** {ans.question}")
+    st.markdown(f"**Q: {ans.question}**")
 
     # Main answer text with highlighted citation tags
     rendered = ans.answer
@@ -161,7 +161,7 @@ def render_answer(ans: RAGAnswer):
                     f"**Chunk #{rc.chunk.chunk_id}** · {rc.chunk.source} · Page {rc.chunk.page}  \n"
                     f"FAISS L2: `{rc.faiss_score:.3f}` · Cosine rerank: `{rc.rerank_score:.4f}` · {rel_str}"
                 )
-                st.text(rc.chunk.text[:300] + ("…" if len(rc.chunk.text) > 300 else ""))
+                st.caption(rc.chunk.text)
                 st.divider()
 
     # ── ARES evaluation ────────────────────────────────────────────────────
@@ -304,9 +304,6 @@ Query
 st.markdown("---")
 
 # ── Render history ─────────────────────────────────────────────────────────────
-for ans in st.session_state["history"]:
-    render_answer(ans)
-
 # ── Question input ─────────────────────────────────────────────────────────────
 engine = get_engine()
 
@@ -339,3 +336,7 @@ else:
         except Exception as ex:
             progress.empty()
             st.error(f"Error: {ex}")
+
+# ── Render history ───────────────────────────────────────────────────────────────────────────
+for ans in st.session_state["history"]:
+    render_answer(ans)
