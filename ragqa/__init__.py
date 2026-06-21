@@ -1,20 +1,16 @@
-"""Backward-compatible imports for the modular :mod:`ragqa` package.
+"""Public API for the direct-or-web RAG assistant."""
 
-New code should import from ``ragqa`` or its focused submodules directly.
-"""
-
-from ragqa import (
+from .config import DEFAULT_CONFIG, PipelineConfig
+from .engine import WebRAGEngine
+from .llm import LocalQwen3
+from .types import (
     Citation,
-    DEFAULT_CONFIG,
-    LocalQwen3,
-    PipelineConfig,
     RAGAnswer,
     RetrievedChunk,
     RouteDecision,
     SearchResult,
     WebChunk,
     WebPage,
-    WebRAGEngine,
     WebRAGError,
 )
 

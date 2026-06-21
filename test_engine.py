@@ -1,126 +1,214 @@
-"""
-test_engine.py
-==============
-Command-line smoke-test for SelfRAGEngine.
-Creates a tiny synthetic PDF-like text corpus in memory and runs one query
-through the full pipeline.
+"""Network-free tests for the direct-or-web RAG pipeline."""
 
-Usage:
-    python test_engine.py
-"""
+from __future__ import annotations
 
-import io
+import json
 
-# We'll inject a fake PDF using pypdf-compatible bytes via reportlab if available,
-# or test with direct chunk injection.
-from rag_engine import SelfRAGEngine, Chunk
 import numpy as np
+import pytest
+
+from ragqa import (
+    SearchResult,
+    WebChunk,
+    WebPage,
+    WebRAGEngine,
+    WebRAGError,
+)
 
 
-def inject_test_chunks(engine: SelfRAGEngine):
-    """Bypass PDF parsing — inject known chunks directly for testing."""
-    texts = [
-        (
-            "Retrieval-Augmented Generation (RAG) combines a parametric language model "
-            "with a non-parametric retrieval component. Lewis et al. (2020) showed that "
-            "RAG significantly outperforms purely parametric models on open-domain QA tasks "
-            "by grounding generation in retrieved documents."
-        ),
-        (
-            "Gao et al. (2024) survey identifies three generations of RAG systems: "
-            "Naive RAG (retrieve once, prepend, generate), Advanced RAG (query rewriting, "
-            "reranking, hybrid search), and Modular RAG (adaptive retrieval scheduling, "
-            "plug-in components, retrieval-augmented fine-tuning)."
-        ),
-        (
-            "Self-RAG (Asai et al. 2023) extends RAG with four reflection tokens: "
-            "[Retrieve] decides if retrieval is necessary, [IsRel] filters irrelevant "
-            "passages, [IsSup] verifies that the answer is grounded in retrieved context, "
-            "and [IsUse] checks that the response is helpful to the user."
-        ),
-        (
-            "FAISS (Facebook AI Similarity Search) is a library for efficient similarity "
-            "search over dense vectors. IndexFlatL2 performs exact L2 nearest-neighbor "
-            "search. For large corpora, IndexIVFFlat with nprobe tuning provides a "
-            "speed-accuracy trade-off."
-        ),
-        (
-            "ARES (Automated RAG Evaluation System) measures three axes: "
-            "Context Relevance (are retrieved passages relevant?), "
-            "Faithfulness (is the answer supported by the context?), and "
-            "Answer Relevance (does the answer address the question?). "
-            "Each axis is scored 0-1 using an LLM judge."
-        ),
+class FakeLLM:
+    def __init__(self, route="direct", malformed=False):
+        self.route = route
+        self.malformed = malformed
+        self.calls = []
+
+    def generate(self, messages, **kwargs):
+        self.calls.append(messages)
+        content = messages[-1]["content"]
+        if "You route questions" in content:
+            if self.malformed:
+                return "this is not JSON"
+            return json.dumps(
+                {
+                    "route": self.route,
+                    "search_query": "latest python release" if self.route == "web" else "",
+                    "reason": "test route",
+                }
+            )
+        if "Web passages:" in content:
+            return "The retrieved pages agree on the result [SOURCE_1] [SOURCE_2]."
+        return "This is a direct answer."
+
+
+class FakeEmbedder:
+    """Small deterministic embedding model suitable for FAISS tests."""
+
+    def encode(self, texts, **kwargs):
+        vectors = []
+        for text in texts:
+            lowered = text.lower()
+            vectors.append(
+                [
+                    lowered.count("python") + 0.1,
+                    lowered.count("release") + 0.1,
+                    lowered.count("database") + 0.1,
+                    len(lowered.split()) / 1000 + 0.1,
+                ]
+            )
+        return np.asarray(vectors, dtype=np.float32)
+
+
+def result(rank, url=None):
+    return SearchResult(
+        title=f"Result {rank}",
+        url=url or f"https://example{rank}.com/article",
+        snippet="A search result snippet",
+        rank=rank,
+    )
+
+
+def page(search_result):
+    text = (
+        "Python release information and documented changes for developers. " * 80
+    )
+    return WebPage(search_result, text)
+
+
+def make_engine(llm=None, key="test-key", search_provider=None, page_fetcher=None):
+    return WebRAGEngine(
+        llm=llm or FakeLLM(),
+        embedder=FakeEmbedder(),
+        serpapi_key=key,
+        search_provider=search_provider,
+        page_fetcher=page_fetcher,
+    )
+
+
+def test_direct_route_never_calls_search_or_fetch():
+    search_calls = []
+
+    def search_provider(query, key):
+        search_calls.append(query)
+        raise AssertionError("Direct route must not search")
+
+    engine = make_engine(FakeLLM("direct"), search_provider=search_provider)
+    answer = engine.answer("Explain recursion simply")
+
+    assert answer.route == "direct"
+    assert answer.answer == "This is a direct answer."
+    assert answer.citations == []
+    assert search_calls == []
+
+
+def test_malformed_router_output_falls_back_to_web():
+    decision = make_engine(FakeLLM(malformed=True)).decide_route("What happened today?")
+    assert decision.route == "web"
+    assert decision.search_query == "What happened today?"
+    assert "invalid" in decision.reason
+
+
+def test_web_route_searches_indexes_retrieves_and_cites():
+    searched = []
+    results = [result(1), result(2)]
+
+    def search_provider(query, key):
+        searched.append((query, key))
+        return results
+
+    engine = make_engine(
+        FakeLLM("web"), search_provider=search_provider, page_fetcher=page
+    )
+    answer = engine.answer("What is in the latest Python release?")
+
+    assert answer.route == "web"
+    assert searched == [("latest python release", "test-key")]
+    assert answer.indexed_source_count == 2
+    assert answer.indexed_chunk_count > 2
+    assert {citation.url for citation in answer.citations} == {
+        results[0].url,
+        results[1].url,
+    }
+    assert answer.indexed_chunk_count > len(answer.citations)
+
+
+def test_missing_key_only_fails_when_web_route_is_used():
+    direct = make_engine(FakeLLM("direct"), key="").answer("Say hello")
+    assert direct.route == "direct"
+
+    with pytest.raises(WebRAGError, match="SERPAPI_KEY"):
+        make_engine(FakeLLM("web"), key="").answer("What happened today?")
+
+
+def test_search_filters_invalid_urls_and_deduplicates():
+    raw = [
+        result(1, "https://example.com/page#section"),
+        result(2, "https://example.com/page"),
+        result(3, "ftp://example.com/file"),
+        result(4, "https://other.example/page"),
+    ]
+    engine = make_engine(search_provider=lambda query, key: raw)
+    selected = engine._search("query")
+    assert [item.url for item in selected] == [
+        "https://example.com/page",
+        "https://other.example/page",
     ]
 
-    # Embed them
-    vecs = engine._embed_batch(texts)
 
-    import faiss
-    mat = np.array(vecs, dtype=np.float32)
-    engine.index = faiss.IndexFlatL2(engine._dim)
-    engine.index.add(mat)
-    engine.embeddings_matrix = mat
+def test_any_page_failure_stops_entire_ingestion():
+    results = [result(1), result(2)]
 
-    for i, t in enumerate(texts):
-        engine.chunks.append(Chunk(
-            text=t,
-            source="test_corpus.txt",
-            page=i + 1,
-            chunk_id=i,
-            token_count=len(engine.enc.encode(t)),
-        ))
+    def fetcher(item):
+        if item.rank == 2:
+            raise WebRAGError(f"Could not fetch {item.url}: timeout")
+        return page(item)
 
-    print(f"  Injected {len(texts)} test chunks into FAISS index.")
+    engine = make_engine(page_fetcher=fetcher)
+    with pytest.raises(WebRAGError, match="every selected result must succeed"):
+        engine._fetch_all(results)
 
 
-def main():
-    print("=" * 60)
-    print("Self-RAG Engine — CLI Smoke Test")
-    print("=" * 60)
+def test_chunking_uses_overlap_and_assigns_metadata():
+    engine = make_engine()
+    source = result(1)
+    source_text = "alpha beta gamma delta epsilon and zeta. " * 140
+    source_tokens = engine.enc.encode(source_text)
+    chunks = engine._chunk_pages([WebPage(source, source_text)])
 
-    engine = SelfRAGEngine()
-
-    print("\n[1] Injecting test chunks…")
-    inject_test_chunks(engine)
-    print(f"     Chunks in index: {engine.num_chunks}")
-
-    question = "What are the Self-RAG reflection tokens and what does each one do?"
-    print(f"\n[2] Running full pipeline for question:\n    '{question}'\n")
-
-    ans = engine.answer(question)
-
-    print("─" * 60)
-    print("ANSWER:")
-    print(ans.answer)
-    print()
-
-    print("─" * 60)
-    print("SELF-RAG DECISIONS:")
-    print(f"  [Retrieve]  : {ans.self_rag.retrieve}")
-    print(f"  [IsRel]     : {ans.self_rag.is_relevant}")
-    print(f"  [IsSup]     : {ans.self_rag.is_supported}")
-    print(f"  [IsUse]     : {ans.self_rag.is_useful}")
-    print(f"  Critique    : {ans.self_rag.critique}")
-
-    print()
-    print("CITATIONS:")
-    for c in ans.citations:
-        print(f"  {c['tag']} → {c['source']} p.{c['page']}  (rerank={c['rerank_score']:.4f})")
-        print(f"    \"{c['excerpt'][:80]}...\"")
-
-    print()
-    print("ARES SCORES:")
-    print(f"  Faithfulness      : {ans.ares.faithfulness:.3f}")
-    print(f"  Answer Relevance  : {ans.ares.answer_relevance:.3f}")
-    print(f"  Context Relevance : {ans.ares.context_relevance:.3f}")
-    print(f"  Overall           : {ans.ares.overall:.3f}")
-
-    print()
-    print(f"Latency: {ans.latency_ms:.0f} ms")
-    print("=" * 60)
-    print("Smoke test complete ✓")
+    expected_starts = range(
+        0, len(source_tokens), engine.CHUNK_SIZE - engine.CHUNK_OVERLAP
+    )
+    expected_count = sum(
+        len(engine.enc.decode(source_tokens[start : start + engine.CHUNK_SIZE]).strip())
+        >= 80
+        for start in expected_starts
+    )
+    assert len(chunks) == expected_count
+    assert chunks[0].token_count == engine.CHUNK_SIZE
+    assert chunks[1].token_count == engine.CHUNK_SIZE
+    assert engine.CHUNK_SIZE - engine.CHUNK_OVERLAP == 250
+    assert all(chunk.url == source.url for chunk in chunks)
 
 
-if __name__ == "__main__":
-    main()
+def test_retrieval_obeys_context_budget_and_source_diversity():
+    engine = make_engine()
+    chunks = []
+    for i in range(12):
+        source_number = 1 if i < 8 else 2
+        chunks.append(
+            WebChunk(
+                text=("Python release " * 150) + str(i),
+                title=f"Source {source_number}",
+                url=f"https://source{source_number}.example",
+                search_rank=source_number,
+                chunk_id=i,
+                token_count=300,
+            )
+        )
+
+    retrieved = engine._retrieve("Python release", chunks)
+    assert sum(item.chunk.token_count for item in retrieved) <= engine.MAX_CONTEXT_TOKENS
+    assert len({item.chunk.url for item in retrieved}) == 2
+    assert all(
+        sum(item.chunk.url == url for item in retrieved) <= engine.MAX_CHUNKS_PER_SOURCE
+        for url in {item.chunk.url for item in retrieved}
+    )

@@ -1,143 +1,77 @@
-<img width="1470" height="956" alt="Screenshot 2026-06-14 at 19 47 13" src="https://github.com/user-attachments/assets/febd5006-3c97-493f-8cdf-347ae487b7af" />
-<img width="1470" height="956" alt="Screenshot 2026-06-14 at 19 47 41" src="https://github.com/user-attachments/assets/a0c85c71-3d00-4267-a533-6668626ee965" />
+# Direct-or-Web RAG Assistant
 
-<img width="1470" height="956" alt="Screenshot 2026-06-14 at 19 47 32" src="https://github.com/user-attachments/assets/c647ef5a-a0f2-4178-97a6-166c04bd618f" />
-# Self-RAG PDF Chatbot
-
-**Fully local pipeline: PDF → FAISS → Self-RAG → Qwen3-8B 4-bit → ARES evaluation**
-
-Implements the core ideas from:
-- **Lewis et al. (2020)** — Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks
-- **Gao et al. (2024)** — RAG for Large Language Models: A Survey (Advanced RAG: reranking, chunking strategies, evaluation)
-- **Asai et al. (2023)** — Self-RAG: Learning to Retrieve, Generate, and Critique (ICLR 2024)
-
----
+A local Qwen3 assistant that decides whether each question can be answered directly or needs current web research.
 
 ## Architecture
 
-```
-PDF(s)
-  │
-  ├─ [Chunking]   Sliding window, 400 tok / 60 tok overlap        ← Gao §3.2
-  ├─ [Embedding]  all-MiniLM-L6-v2 (384-dim, local)
-  └─ [FAISS]      IndexFlatL2 — exact nearest-neighbor index       ← Lewis §2
-
-Query
-  │
-  ├─ [Retrieve?]  Self-RAG [Retrieve] token                        ← Asai §3
-  ├─ [FAISS]      top-6 candidates by L2 distance
-  ├─ [Rerank]     cosine similarity → keep top-3                   ← Gao §3.3
-  ├─ [IsRel]      Self-RAG relevance filter (per chunk)            ← Asai §3
-  ├─ [Generate]   Qwen3-8B 4-bit + [SOURCE_N] citation markers     ← Lewis §4
-  ├─ [IsSup]      Self-RAG groundedness check                      ← Asai §3
-  ├─ [IsUse]      Self-RAG utility check                           ← Asai §3
-  └─ [ARES]       Faithfulness / Answer Relevance / Context Rel.   ← Gao §5
+```text
+Question → Qwen3 route decision
+  ├─ DIRECT → local answer
+  └─ WEB → SerpAPI → fetch five organic result pages
+                    → extract HTML/PDF text
+                    → 300-token chunks with 50-token overlap
+                    → local MiniLM embeddings
+                    → temporary FAISS cosine index
+                    → retrieve within a 1,400-token budget
+                    → grounded answer with URL citations
 ```
 
----
+Web indexes exist for one request only. Full fetched pages, chunks, embeddings, and the FAISS index are released after the answer; chat history retains only compact citation metadata and excerpts.
 
 ## Setup
 
 ```bash
-# 1. Clone / copy files into a directory
-cd pdf_rag_selfrag
-
-# 2. Create a virtual environment
 python3 -m venv .venv
-source .venv/bin/activate       # Windows: .venv\Scripts\activate
-
-# 3. Install dependencies
+source .venv/bin/activate
 pip install -r requirements.txt
-
-# No API key is needed. Models are downloaded from Hugging Face on first use.
-```
-
----
-
-## Run
-
-### Streamlit UI (recommended)
-```bash
+export SERPAPI_KEY="your-key"
 streamlit run app.py
 ```
-Open `http://localhost:8501`, click **Load local models**, then upload PDFs. On
-Apple Silicon the app uses `Qwen/Qwen3-8B-MLX-4bit`; on CUDA/Linux it loads
-`Qwen/Qwen3-8B` with NF4 4-bit quantization through bitsandbytes. Allow roughly
-6 GB of free memory plus disk space for the first model download. The sidebar
-shows byte-level download progress. Completed files remain in the Hugging Face
-cache and are reused automatically on every later launch.
 
-### CLI smoke test (no PDF needed)
+Instead of an environment variable, the key can be stored in `.streamlit/secrets.toml`:
+
+```toml
+SERPAPI_KEY = "your-key"
+```
+
+Do not commit that file. The environment variable takes precedence when both are present. A key is only required for questions routed to web search; direct answers continue to work without it.
+
+On first launch, **Load local models** downloads Qwen3 and `all-MiniLM-L6-v2`. Apple Silicon uses `Qwen/Qwen3-8B-MLX-4bit`; other supported platforms use the Transformers model with 4-bit quantization. Set `QWEN_MODEL_ID` to use another compatible checkpoint.
+
+## Web behavior
+
+- SerpAPI supplies organic result metadata and URLs.
+- The first five unique HTTP(S) results are fetched concurrently.
+- HTML is extracted with `trafilatura`; web-hosted PDF results use `pypdf`.
+- Responses are limited to 5 MB and requests have bounded timeouts.
+- The pipeline is intentionally strict: if any selected page fails to download or parse, the request stops and reports the failing URL. It does not answer from snippets or partial evidence.
+- Generated web answers may use only the chunks included in their prompt and cite them with clickable source links.
+
+## Tests
+
+Tests use fake model, search, fetch, and embedding components, so they consume no SerpAPI quota and download no models:
+
 ```bash
-python test_engine.py
-```
-Injects 5 RAG-topic paragraphs directly and runs a full pipeline query.
-
----
-
-## Features
-
-| Feature | Implementation |
-|---|---|
-| PDF ingestion | `pypdf` — multi-page, multi-file |
-| Chunking | Sliding window (400 tok, 60 tok overlap) via `tiktoken` |
-| Embeddings | Local `all-MiniLM-L6-v2` (384-dim) |
-| Vector store | `faiss-cpu` `IndexFlatL2` — exact L2 search |
-| Reranking | Cosine similarity re-sort of top-6 FAISS hits → top-3 |
-| **Self-RAG [Retrieve]** | LLM decides if retrieval is needed at all |
-| **Self-RAG [IsRel]** | Per-chunk relevance filtering |
-| **Self-RAG [IsSup]** | Groundedness check on generated answer |
-| **Self-RAG [IsUse]** | Utility check on generated answer |
-| Citations | Inline `[SOURCE_N]` markers → file + page + excerpt |
-| **ARES Faithfulness** | LLM judge: answer supported by context? |
-| **ARES Answer Relevance** | LLM judge: answer addresses the question? |
-| **ARES Context Relevance** | LLM judge: retrieved context relevant? |
-| Generation | Local Qwen3-8B — 4-bit quantized |
-
----
-
-## Local model configuration
-
-No per-query API cost or API key is required. To use a compatible alternative
-checkpoint, set `QWEN_MODEL_ID` before starting the app. The default is already
-4-bit on Apple Silicon; other platforms quantize the base Qwen3-8B weights to
-4-bit while loading.
-
----
-
-## File structure
-
-```
-pdf_rag_selfrag/
-├── rag_engine.py    # Core Self-RAG engine (chunking, FAISS, reranking, generation, ARES)
-├── app.py           # Streamlit UI
-├── test_engine.py   # CLI smoke test
-├── requirements.txt
-└── README.md
+pytest -q
 ```
 
----
+They cover direct routing, safe router fallback, the complete web path, URL deduplication, missing credentials, strict fetch failure, token-aware chunking, context limits, source diversity, and citations.
 
-## Extending
+## Files
 
-**Swap the vector store** — replace `faiss.IndexFlatL2` with `IndexIVFFlat` for large corpora:
-```python
-quantizer = faiss.IndexFlatL2(dim)
-index = faiss.IndexIVFFlat(quantizer, dim, nlist=100)
-index.train(training_vectors)
-```
-
-**Add HyDE** (Hypothetical Document Embeddings, Gao §3.1) — generate a hypothetical answer and embed that instead of the raw query:
-```python
-def hyde_embed(self, question: str) -> np.ndarray:
-    hyp = self.client.generate([...])  # generate hypothetical doc locally
-    return self._embed_one(hyp)
-```
-
-**Multi-hop retrieval** — iterate: generate intermediate answer → extract sub-question → retrieve again.
-
-**Persistent index** — save/load FAISS index and chunks:
-```python
-faiss.write_index(self.index, "index.faiss")
-# restore: self.index = faiss.read_index("index.faiss")
+```text
+ragqa/
+├── engine.py       # Pipeline orchestration
+├── routing.py      # Direct-versus-web LLM decision
+├── web.py          # SerpAPI discovery and HTML/PDF extraction
+├── retrieval.py    # Chunking and temporary FAISS search
+├── generation.py   # Direct and grounded generation prompts
+├── llm.py          # Local Qwen loading and generation adapter
+├── types.py        # Shared data contracts and errors
+└── config.py       # Pipeline defaults
+rag_engine.py       # Compatibility import facade
+app.py              # Streamlit UI
+test_engine.py      # Network-free engine tests
+test_app.py         # Streamlit surface tests
+requirements.txt
 ```
