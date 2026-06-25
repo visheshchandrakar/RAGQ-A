@@ -1,7 +1,4 @@
-<img width="1470" height="956" alt="Screenshot 2026-06-14 at 19 47 13" src="https://github.com/user-attachments/assets/febd5006-3c97-493f-8cdf-347ae487b7af" />
-<img width="1470" height="956" alt="Screenshot 2026-06-14 at 19 47 41" src="https://github.com/user-attachments/assets/a0c85c71-3d00-4267-a533-6668626ee965" />
 
-<img width="1470" height="956" alt="Screenshot 2026-06-14 at 19 47 32" src="https://github.com/user-attachments/assets/c647ef5a-a0f2-4178-97a6-166c04bd618f" />
 # Self-RAG PDF Chatbot
 
 **Fully local pipeline: PDF → FAISS → Self-RAG → Qwen3-8B 4-bit → ARES evaluation**
