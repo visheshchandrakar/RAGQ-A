@@ -19,6 +19,8 @@ Question → Qwen3 route decision
 
 Web indexes exist for one request only. Full fetched pages, chunks, embeddings, and the FAISS index are released after the answer; chat history retains only compact citation metadata and excerpts.
 
+A second in-app page (**🏗️ Architecture**, reachable from the sidebar nav) visualizes this pipeline as a color-coded component grid plus a side-by-side direct vs. web route walkthrough. For the full written design — sequence diagrams, data contracts, trade-offs, and discussion questions — see [ARCHITECTURE.md](ARCHITECTURE.md).
+
 ## Setup
 
 ```bash
@@ -73,8 +75,12 @@ ragqa/
 ├── llm.py          # Local Qwen loading and generation adapter
 ├── types.py        # Shared data contracts and errors
 └── config.py       # Pipeline defaults
+pages/
+└── architecture.py # Streamlit "Architecture" page
 rag_engine.py       # Compatibility import facade
-app.py              # Streamlit UI
+app.py              # Streamlit UI (chat page)
+app_ui.html         # Shared CSS/JS injected into both pages
+ARCHITECTURE.md      # Full architecture write-up
 test_engine.py      # Network-free engine tests
 test_app.py         # Streamlit surface tests
 requirements.txt

@@ -16,6 +16,7 @@ from ragqa import (
 )
 
 
+# Fakes replace the real LLM/embedder so the suite runs offline and deterministically.
 class FakeLLM:
     def __init__(self, route="direct", malformed=False):
         self.route = route
@@ -25,6 +26,8 @@ class FakeLLM:
     def generate(self, messages, **kwargs):
         self.calls.append(messages)
         content = messages[-1]["content"]
+        # Branches on a phrase unique to each prompt template, so one fake
+        # plays router, generator, and ARES evaluator without extra wiring.
         if "You route questions" in content:
             if self.malformed:
                 return "this is not JSON"
@@ -57,6 +60,9 @@ class FakeEmbedder:
     """Small deterministic embedding model suitable for FAISS tests."""
 
     def encode(self, texts, **kwargs):
+        # Hand-picked features (keyword counts + length) give chunks about
+        # "python release" a real, predictable similarity edge over noise —
+        # enough for retrieval-ranking assertions without loading MiniLM.
         vectors = []
         for text in texts:
             lowered = text.lower()
@@ -97,6 +103,9 @@ def make_engine(llm=None, key="test-key", search_provider=None, page_fetcher=Non
     )
 
 
+# --- Routing: direct vs. web, and the malformed-output fallback ----------
+
+
 def test_direct_route_never_calls_search_or_fetch():
     search_calls = []
 
@@ -114,10 +123,15 @@ def test_direct_route_never_calls_search_or_fetch():
 
 
 def test_malformed_router_output_falls_back_to_web():
+    # Unparseable router JSON is treated as "web", not a crash — externally
+    # verifiable evidence is the safer default over an unsupported guess.
     decision = make_engine(FakeLLM(malformed=True)).decide_route("What happened today?")
     assert decision.route == "web"
     assert decision.search_query == "What happened today?"
     assert "invalid" in decision.reason
+
+
+# --- Web route: the full search -> fetch -> chunk -> retrieve -> cite path -
 
 
 def test_web_route_searches_indexes_retrieves_and_cites():
@@ -156,12 +170,18 @@ def test_web_route_searches_indexes_retrieves_and_cites():
     }
 
 
+# --- Credentials only matter on the route that actually needs them -------
+
+
 def test_missing_key_only_fails_when_web_route_is_used():
     direct = make_engine(FakeLLM("direct"), key="").answer("Say hello")
     assert direct.route == "direct"
 
     with pytest.raises(WebRAGError, match="SERPAPI_KEY"):
         make_engine(FakeLLM("web"), key="").answer("What happened today?")
+
+
+# --- Search-result cleanup: scheme check, fragment stripping, dedup ------
 
 
 def test_search_filters_invalid_urls_and_deduplicates():
@@ -177,6 +197,9 @@ def test_search_filters_invalid_urls_and_deduplicates():
         "https://example.com/page",
         "https://other.example/page",
     ]
+
+
+# --- Partial vs. total page-fetch failure ---------------------------------
 
 
 def test_page_failure_is_reported_while_successful_pages_continue():
@@ -205,6 +228,9 @@ def test_all_page_failures_still_stop_ingestion():
         engine._fetch_all(results)
 
 
+# --- Token-window chunking: stride, dropped tail chunks, provenance ------
+
+
 def test_chunking_uses_overlap_and_assigns_metadata():
     engine = make_engine()
     source = result(1)
@@ -212,6 +238,9 @@ def test_chunking_uses_overlap_and_assigns_metadata():
     source_tokens = engine.enc.encode(source_text)
     chunks = engine._chunk_pages([WebPage(source, source_text)])
 
+    # Windows slide by (CHUNK_SIZE - CHUNK_OVERLAP) tokens; a trailing window
+    # decoding to under 80 chars is dropped, so this recomputes the same rule
+    # independently rather than asserting against a hardcoded chunk count.
     expected_starts = range(
         0, len(source_tokens), engine.CHUNK_SIZE - engine.CHUNK_OVERLAP
     )
@@ -227,8 +256,14 @@ def test_chunking_uses_overlap_and_assigns_metadata():
     assert all(chunk.url == source.url for chunk in chunks)
 
 
+# --- Retrieval constraints: token budget and per-source diversity cap ----
+
+
 def test_retrieval_obeys_context_budget_and_source_diversity():
     engine = make_engine()
+    # 8 chunks from source 1, 4 from source 2 — skewed so the diversity cap
+    # (MAX_CHUNKS_PER_SOURCE) actually has to kick in to keep both sources
+    # represented, rather than pure top-k similarity picking all of one.
     chunks = []
     for i in range(12):
         source_number = 1 if i < 8 else 2
